@@ -13,7 +13,7 @@ from pathlib import Path
 
 import asyncpg
 from cryptography.fernet import Fernet
-from fastapi import FastAPI, Query, Header, HTTPException
+from fastapi import FastAPI, Query, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -1198,8 +1198,12 @@ async def list_scripts():
     return {"scripts": result}
 
 @app.get("/api/scripts/{script_id}/download")
-async def download_script(script_id: str):
-    """Download a script with server URL and API key pre-configured."""
+async def download_script(script_id: str, request: Request, api_key: str = Query(default="")):
+    """Download a script with server URL and API key pre-configured.
+
+    Pass ?api_key=<key> to embed a specific key. The UI sends the key
+    chosen by the user so the downloaded script is ready to run.
+    """
     entry = next((s for s in SCRIPT_CATALOG if s["id"] == script_id), None)
     if not entry:
         raise HTTPException(404, "Script not found")
@@ -1209,32 +1213,29 @@ async def download_script(script_id: str):
 
     content = script_path.read_text(encoding="utf-8")
 
-    # Inject current server URL and API key
-    async with pool.acquire() as conn:
-        # Prefer newest active key from api_keys table
-        api_key = await conn.fetchval(
-            "SELECT key_prefix FROM api_keys WHERE status='active' ORDER BY created_at DESC LIMIT 1")
-        if api_key:
-            api_key = None  # Can't recover full key from hash; user must paste it
-        # Fallback to legacy setting
-        if not api_key:
-            legacy = await conn.fetchval("SELECT value FROM settings WHERE key='agent_api_key'")
-            if legacy:
-                api_key = decrypt_value(legacy)
-
-    import socket
-    server_host = socket.getfqdn()
-    server_url = f"http://{server_host}:3000"
+    # Derive server URL from the incoming request (what the browser actually used)
+    host_header = request.headers.get("host", "")
+    scheme = request.headers.get("x-forwarded-proto", "http")
+    server_url = f"{scheme}://{host_header}" if host_header else "http://localhost:3000"
 
     # Replace default values in the param blocks
-    content = content.replace(
-        '[string]$ApiUrl = "http://xdcvudocker01.emplify.org:8000"',
-        f'[string]$ApiUrl = "{server_url}"'
+    import re
+    content = re.sub(
+        r'\[string\]\$ApiUrl\s*=\s*"[^"]*"',
+        f'[string]$ApiUrl = "{server_url}"',
+        content
     )
     if api_key:
-        content = content.replace(
-            '[string]$ApiKey = "0CJo79gwVOEewsE53PzgrY93crCGsWXMjd0F6knt1p8"',
-            f'[string]$ApiKey = "{api_key}"'
+        content = re.sub(
+            r'\[string\]\$ApiKey\s*=\s*"[^"]*"',
+            f'[string]$ApiKey = "{api_key}"',
+            content
+        )
+    else:
+        content = re.sub(
+            r'\[string\]\$ApiKey\s*=\s*"[^"]*"',
+            '[string]$ApiKey = "PASTE_YOUR_API_KEY_HERE"',
+            content
         )
 
     return PlainTextResponse(

@@ -633,15 +633,41 @@ function ApiKeysSection() {
 // ════════════════════════════════════════════════════════════════
 function ScriptsPage() {
   const { data, loading } = useFetch('/scripts');
+  const keys = useFetch('/api-keys');
+  const [selectedKey, setSelectedKey] = useState('');
 
   if (loading || !data) return <Spinner />;
+
+  const activeKeys = (keys.data?.api_keys || []).filter(k => k.status === 'active');
+
+  const download = (scriptId) => {
+    const params = selectedKey ? `?api_key=${encodeURIComponent(selectedKey)}` : '';
+    window.open(`${API}/scripts/${scriptId}/download${params}`);
+  };
 
   return (
     <div>
       <div className="page-header">
         <h1>Collection Scripts</h1>
       </div>
-      <p style={{marginBottom:'1rem',color:'var(--text-secondary,#666)'}}>Download pre-configured PowerShell scripts for inventory collection. Scripts are automatically configured with your server URL and API key.</p>
+      <p style={{marginBottom:'1rem',color:'var(--text-secondary,#666)'}}>Download pre-configured PowerShell scripts for inventory collection. Scripts are automatically configured with your server URL and the API key you select below.</p>
+
+      <div className="card" style={{padding:'1rem',marginBottom:'1.5rem'}}>
+        <label style={{display:'flex',alignItems:'center',gap:'0.75rem'}}>
+          <strong>Embed API Key:</strong>
+          {activeKeys.length > 0 ? (
+            <select value={selectedKey} onChange={e => setSelectedKey(e.target.value)} style={{flex:1,maxWidth:'400px'}}>
+              <option value="">— None (you'll paste manually) —</option>
+              {activeKeys.map(k => <option key={k.id} value={k.key_prefix}>Can't embed — copy from Settings</option>)}
+            </select>
+          ) : (
+            <span style={{color:'#e53935'}}>No active API keys. Create one in Settings first.</span>
+          )}
+          <input type="text" value={selectedKey} onChange={e => setSelectedKey(e.target.value)}
+            placeholder="Paste your API key here" style={{flex:1,maxWidth:'400px'}} />
+        </label>
+      </div>
+
       <div style={{display:'grid',gap:'1rem'}}>
         {(data.scripts||[]).map(s => (
           <div key={s.id} className="card" style={{padding:'1.25rem'}}>
@@ -654,16 +680,13 @@ function ScriptsPage() {
                 </div>
               </div>
               <button className="btn btn-primary" disabled={!s.available}
-                onClick={() => window.open(`${API}/scripts/${s.id}/download`)}
+                onClick={() => download(s.id)}
                 style={{whiteSpace:'nowrap',marginLeft:'1rem'}}>
                 {s.available ? '⬇ Download' : 'Unavailable'}
               </button>
             </div>
           </div>
         ))}
-      </div>
-      <div className="info-box" style={{marginTop:'1.5rem'}}>
-        <strong>Note:</strong> Make sure you've generated an Agent API Key in Settings before deploying these scripts. The downloaded scripts will have your current server URL and API key pre-filled.
       </div>
     </div>
   );
