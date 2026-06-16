@@ -561,13 +561,35 @@ const MS_PARTS = [
 
 function Entitlements() {
   const { data, loading, reload } = useFetch('/entitlements');
+  const { data: agrData, loading: agrLoading, reload: agrReload } = useFetch('/agreements');
   const [editing, setEditing] = useState({});
   const [saving, setSaving] = useState(false);
   const [showCustom, setShowCustom] = useState(false);
   const [customForm, setCustomForm] = useState(null);
+  const [agrForm, setAgrForm] = useState(null);
+  const [selectedAgreement, setSelectedAgreement] = useState('all');
+  const [tab, setTab] = useState('agreements');
 
-  // Build a lookup from (family+edition+type) → existing entitlement
+  const agreements = agrData?.agreements || [];
   const ents = data?.entitlements || [];
+
+  // Agreement helpers
+  const isExpired = (d) => d && new Date(d) < new Date();
+  const daysUntil = (d) => d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null;
+
+  const saveAgreement = async () => {
+    const method = agrForm.id ? 'PUT' : 'POST';
+    const url = agrForm.id ? `${API}/agreements/${agrForm.id}` : `${API}/agreements`;
+    await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(agrForm) });
+    setAgrForm(null); agrReload(); reload();
+  };
+
+  const deleteAgreement = async (id) => {
+    if (!confirm('Delete this agreement? Entitlements linked to it will be unlinked.')) return;
+    await fetch(`${API}/agreements/${id}`, { method: 'DELETE' }); agrReload(); reload();
+  };
+
+  // Entitlement lookup
   const entMap = {};
   ents.forEach(e => {
     const key = `${e.product_family}|${e.edition}|${e.license_type}`;
@@ -576,33 +598,44 @@ function Entitlements() {
 
   const getQty = (part) => {
     const key = `${part.family}|${part.edition}|${part.type}`;
-    if (editing[key] !== undefined) return editing[key];
+    if (editing[key] !== undefined) return editing[key].qty;
     const existing = entMap[key];
     return existing ? existing.quantity : 0;
   };
 
-  const setQty = (part, val) => {
+  const getAgrId = (part) => {
     const key = `${part.family}|${part.edition}|${part.type}`;
-    setEditing({...editing, [key]: parseInt(val) || 0});
+    if (editing[key] !== undefined) return editing[key].agrId;
+    const existing = entMap[key];
+    return existing ? (existing.agreement_id || '') : '';
+  };
+
+  const setField = (part, field, val) => {
+    const key = `${part.family}|${part.edition}|${part.type}`;
+    const existing = entMap[key];
+    const cur = editing[key] || { qty: existing?.quantity || 0, agrId: existing?.agreement_id || '' };
+    setEditing({...editing, [key]: {...cur, [field]: val}});
   };
 
   const saveAll = async () => {
     setSaving(true);
-    for (const [key, qty] of Object.entries(editing)) {
+    for (const [key, vals] of Object.entries(editing)) {
       const [family, edition, type] = key.split('|');
       const existing = entMap[key];
       const partInfo = MS_PARTS.find(p => p.family === family && p.edition === edition && p.type === type);
       const productName = partInfo ? partInfo.desc : `${family} ${edition}`;
+      const partNumber = partInfo ? partInfo.part : '';
+      const body = {
+        product_name: productName, product_family: family, edition, license_type: type,
+        quantity: vals.qty, agreement_id: vals.agrId || null, part_number: partNumber,
+        ...(existing ? {agreement_number: existing.agreement_number, agreement_type: existing.agreement_type,
+          effective_date: existing.effective_date, expiry_date: existing.expiry_date,
+          sa_included: existing.sa_included, notes: existing.notes} : {})
+      };
       if (existing) {
-        await fetch(`${API}/entitlements/${existing.id}`, {
-          method: 'PUT', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({...existing, quantity: qty})
-        });
-      } else if (qty > 0) {
-        await fetch(`${API}/entitlements`, {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ product_name: productName, product_family: family, edition, license_type: type, quantity: qty })
-        });
+        await fetch(`${API}/entitlements/${existing.id}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      } else if (vals.qty > 0) {
+        await fetch(`${API}/entitlements`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
       }
     }
     setEditing({});
@@ -622,9 +655,8 @@ function Entitlements() {
     await fetch(`${API}/entitlements/${id}`, { method: 'DELETE' }); reload();
   };
 
-  if (loading || !data) return <Spinner />;
+  if (loading || agrLoading || !data || !agrData) return <Spinner />;
 
-  // Find custom entitlements (ones not matching any standard part)
   const standardKeys = new Set(MS_PARTS.map(p => `${p.family}|${p.edition}|${p.type}`));
   const customEnts = ents.filter(e => !standardKeys.has(`${e.product_family}|${e.edition}|${e.license_type}`));
   const hasChanges = Object.keys(editing).length > 0;
@@ -633,56 +665,166 @@ function Entitlements() {
     <div>
       <div className="page-header">
         <h1>Entitlements</h1>
-        <div className="header-actions">
-          {hasChanges && <button className="btn btn-primary" onClick={saveAll} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</button>}
-          <button className="btn btn-secondary" onClick={() => setShowCustom(!showCustom)}>{showCustom ? 'Hide Custom' : '+ Custom Entitlement'}</button>
-        </div>
       </div>
 
-      <p style={{color:'var(--text-secondary)',marginBottom:'1rem',fontSize:'0.85rem'}}>
-        Enter the quantity of two-core packs (or CALs) from your Microsoft EA agreement. These are the standard part numbers — just fill in how many you have.
-      </p>
+      <div className="tab-bar" style={{marginBottom:'1rem'}}>
+        {['agreements','licenses','custom'].map(t => (
+          <button key={t} className={`tab ${tab===t?'active':''}`} onClick={() => setTab(t)}>
+            {t === 'agreements' ? 'Enterprise Agreements' : t === 'licenses' ? 'License Counts' : 'Custom Entitlements'}
+          </button>
+        ))}
+      </div>
 
-      <table className="data-table">
-        <thead>
-          <tr><th>Part #</th><th>Description</th><th>Product</th><th>Edition</th><th>License Type</th><th style={{width:'100px'}}>Quantity</th></tr>
-        </thead>
-        <tbody>
-          {MS_PARTS.map(p => {
-            const key = `${p.family}|${p.edition}|${p.type}`;
-            const existing = entMap[key];
-            const qty = getQty(p);
-            const changed = editing[key] !== undefined && editing[key] !== (existing?.quantity || 0);
-            return (
-              <tr key={p.part} style={changed ? {background:'#ecfeff'} : {}}>
-                <td><code>{p.part}</code></td>
-                <td style={{fontSize:'0.8rem',color:'var(--text-secondary)'}}>{p.desc}</td>
-                <td>{p.family === 'WindowsServer' ? 'Windows Server' : p.family === 'SQLServer' ? 'SQL Server' : p.family}</td>
-                <td>{p.edition}</td>
-                <td>{p.type === 'core_2pack' ? 'Core 2-Pack' : p.type === 'cal_device' ? 'CAL (Device)' : p.type === 'cal_user' ? 'CAL (User)' : p.type}</td>
-                <td>
-                  <input type="number" min="0" value={qty} onChange={e => setQty(p, e.target.value)}
-                    style={{width:'80px',padding:'0.35rem 0.5rem',textAlign:'center',fontWeight:600,fontSize:'0.9rem'}} />
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-
-      {/* Custom entitlements */}
-      {(showCustom || customEnts.length > 0) && (
-        <div style={{marginTop:'1.5rem'}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'0.75rem'}}>
-            <h2>Custom Entitlements</h2>
-            <button className="btn btn-primary" onClick={() => setCustomForm({ product_name: '', product_family: 'WindowsServer', edition: 'Standard', license_type: 'core_2pack', quantity: 1 })}>+ Add Custom</button>
+      {/* ── Agreements Tab ── */}
+      {tab === 'agreements' && (
+        <div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem'}}>
+            <p style={{color:'var(--text-secondary)',fontSize:'0.85rem',margin:0}}>
+              Track your Microsoft Enterprise Agreements, enrollment numbers, and expiry dates.
+            </p>
+            <button className="btn btn-primary" onClick={() => setAgrForm({ name:'', agreement_number:'', agreement_type:'EA', start_date:'', expiry_date:'', notes:'' })}>+ Add Agreement</button>
           </div>
-          {customEnts.length > 0 && (
+
+          {agreements.length === 0 ? (
+            <div className="card" style={{textAlign:'center',padding:'2rem',color:'var(--text-secondary)'}}>
+              No agreements yet. Add your first Enterprise Agreement to start tracking expiry dates.
+            </div>
+          ) : (
+            <div style={{display:'grid',gap:'0.75rem'}}>
+              {agreements.map(a => {
+                const expired = isExpired(a.expiry_date);
+                const days = daysUntil(a.expiry_date);
+                const expiring = days !== null && days > 0 && days <= 90;
+                const linkedCount = ents.filter(e => e.agreement_id === a.id).length;
+                return (
+                  <div key={a.id} className="card" style={{border: expired ? '1px solid #ef4444' : expiring ? '1px solid #f59e0b' : '1px solid var(--border)'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                      <div>
+                        <div style={{display:'flex',alignItems:'center',gap:'0.5rem',marginBottom:'0.25rem'}}>
+                          <strong style={{fontSize:'1rem'}}>{a.name}</strong>
+                          <span className="badge" style={{background: expired ? '#fef2f2' : expiring ? '#fffbeb' : '#f0fdf4', color: expired ? '#dc2626' : expiring ? '#d97706' : '#16a34a', fontSize:'0.7rem'}}>
+                            {expired ? 'EXPIRED' : expiring ? `${days}d left` : days !== null ? 'Active' : 'No expiry set'}
+                          </span>
+                        </div>
+                        <div style={{fontSize:'0.85rem',color:'var(--text-secondary)',display:'flex',gap:'1.5rem',flexWrap:'wrap'}}>
+                          {a.agreement_number && <span>Enrollment: <strong>{a.agreement_number}</strong></span>}
+                          <span>Type: {a.agreement_type || 'EA'}</span>
+                          {a.start_date && <span>Start: {a.start_date}</span>}
+                          {a.expiry_date && <span>Expiry: <strong style={{color: expired ? '#dc2626' : expiring ? '#d97706' : 'inherit'}}>{a.expiry_date}</strong></span>}
+                          <span>{linkedCount} entitlement{linkedCount !== 1 ? 's' : ''} linked</span>
+                        </div>
+                        {a.notes && <div style={{fontSize:'0.8rem',color:'var(--text-tertiary)',marginTop:'0.25rem'}}>{a.notes}</div>}
+                      </div>
+                      <div style={{display:'flex',gap:'0.5rem'}}>
+                        <button className="btn-sm" onClick={() => setAgrForm({...a})}>Edit</button>
+                        <button className="btn-sm btn-danger" onClick={() => deleteAgreement(a.id)}>Delete</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {agrForm && (
+            <div className="modal-overlay" onMouseDown={e => { if (e.target === e.currentTarget) setAgrForm(null); }}>
+              <div className="modal">
+                <h3>{agrForm.id ? 'Edit' : 'Add'} Enterprise Agreement</h3>
+                <div className="form-grid">
+                  <label>Agreement Name<input value={agrForm.name} onChange={e => setAgrForm({...agrForm, name: e.target.value})} placeholder="e.g. Gundersen EA 2024-2027" /></label>
+                  <label>Enrollment Number<input value={agrForm.agreement_number||''} onChange={e => setAgrForm({...agrForm, agreement_number: e.target.value})} placeholder="e.g. 12345678" /></label>
+                  <label>Type<select value={agrForm.agreement_type||'EA'} onChange={e => setAgrForm({...agrForm, agreement_type: e.target.value})}>
+                    <option value="EA">Enterprise Agreement (EA)</option><option value="EAS">EA Subscription</option><option value="SCE">Server & Cloud Enrollment</option><option value="CSP">Cloud Solution Provider</option><option value="MPSA">MPSA</option>
+                  </select></label>
+                  <label>Start Date<input type="date" value={agrForm.start_date||''} onChange={e => setAgrForm({...agrForm, start_date: e.target.value})} /></label>
+                  <label>Expiry Date<input type="date" value={agrForm.expiry_date||''} onChange={e => setAgrForm({...agrForm, expiry_date: e.target.value})} /></label>
+                  <label style={{gridColumn:'1/-1'}}>Notes<textarea value={agrForm.notes||''} onChange={e => setAgrForm({...agrForm, notes: e.target.value})} rows={2} /></label>
+                </div>
+                <div className="modal-actions"><button className="btn btn-primary" onClick={saveAgreement}>Save</button><button className="btn btn-secondary" onClick={() => setAgrForm(null)}>Cancel</button></div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── License Counts Tab ── */}
+      {tab === 'licenses' && (
+        <div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem'}}>
+            <p style={{color:'var(--text-secondary)',fontSize:'0.85rem',margin:0}}>
+              Enter the quantity of two-core packs (or CALs) from your EA. Assign each to an agreement for expiry tracking.
+            </p>
+            <div style={{display:'flex',gap:'0.5rem',alignItems:'center'}}>
+              {hasChanges && <button className="btn btn-primary" onClick={saveAll} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</button>}
+            </div>
+          </div>
+
+          <table className="data-table">
+            <thead>
+              <tr><th>Part #</th><th>Description</th><th>Product</th><th>Edition</th><th>Type</th><th style={{width:'80px'}}>Qty</th><th style={{width:'180px'}}>Agreement</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              {MS_PARTS.map(p => {
+                const key = `${p.family}|${p.edition}|${p.type}`;
+                const existing = entMap[key];
+                const qty = getQty(p);
+                const agrId = getAgrId(p);
+                const linkedAgr = agreements.find(a => a.id === (typeof agrId === 'string' ? parseInt(agrId) : agrId));
+                const expired = linkedAgr && isExpired(linkedAgr.expiry_date);
+                const days = linkedAgr ? daysUntil(linkedAgr.expiry_date) : null;
+                const expiring = days !== null && days > 0 && days <= 90;
+                const changed = editing[key] !== undefined;
+                return (
+                  <tr key={p.part} style={changed ? {background:'#ecfeff'} : expired ? {background:'#fef2f2'} : {}}>
+                    <td><code>{p.part}</code></td>
+                    <td style={{fontSize:'0.8rem',color:'var(--text-secondary)'}}>{p.desc}</td>
+                    <td>{p.family === 'WindowsServer' ? 'Win Server' : p.family === 'SQLServer' ? 'SQL Server' : p.family}</td>
+                    <td>{p.edition}</td>
+                    <td>{p.type === 'core_2pack' ? '2-Pack' : p.type === 'cal_device' ? 'CAL Dev' : p.type === 'cal_user' ? 'CAL Usr' : p.type}</td>
+                    <td>
+                      <input type="number" min="0" value={qty} onChange={e => setField(p, 'qty', parseInt(e.target.value)||0)}
+                        style={{width:'70px',padding:'0.3rem 0.4rem',textAlign:'center',fontWeight:600,fontSize:'0.85rem'}} />
+                    </td>
+                    <td>
+                      <select value={agrId} onChange={e => setField(p, 'agrId', e.target.value ? parseInt(e.target.value) : '')}
+                        style={{width:'100%',padding:'0.3rem',fontSize:'0.8rem'}}>
+                        <option value="">— None —</option>
+                        {agreements.map(a => <option key={a.id} value={a.id}>{a.name}{isExpired(a.expiry_date) ? ' (EXPIRED)' : ''}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      {qty === 0 ? <span style={{color:'var(--text-tertiary)',fontSize:'0.8rem'}}>—</span> :
+                       !linkedAgr ? <span className="badge" style={{background:'#f3f4f6',color:'#6b7280',fontSize:'0.7rem'}}>Unlinked</span> :
+                       expired ? <span className="badge" style={{background:'#fef2f2',color:'#dc2626',fontSize:'0.7rem'}}>Expired</span> :
+                       expiring ? <span className="badge" style={{background:'#fffbeb',color:'#d97706',fontSize:'0.7rem'}}>{days}d left</span> :
+                       <span className="badge" style={{background:'#f0fdf4',color:'#16a34a',fontSize:'0.7rem'}}>Active</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── Custom Entitlements Tab ── */}
+      {tab === 'custom' && (
+        <div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem'}}>
+            <p style={{color:'var(--text-secondary)',fontSize:'0.85rem',margin:0}}>
+              Non-standard entitlements not covered by the standard MS EA part numbers above.
+            </p>
+            <button className="btn btn-primary" onClick={() => setCustomForm({ product_name: '', product_family: 'WindowsServer', edition: 'Standard', license_type: 'core_2pack', quantity: 1, agreement_id: '' })}>+ Add Custom</button>
+          </div>
+
+          {customEnts.length === 0 ? (
+            <div className="card" style={{textAlign:'center',padding:'2rem',color:'var(--text-secondary)'}}>No custom entitlements.</div>
+          ) : (
             <table className="data-table">
               <thead><tr><th>Product</th><th>Family</th><th>Edition</th><th>Type</th><th>Qty</th><th>Agreement</th><th>Actions</th></tr></thead>
               <tbody>{customEnts.map(e => (
                 <tr key={e.id}><td>{e.product_name}</td><td>{e.product_family}</td><td>{e.edition}</td><td>{e.license_type}</td><td>{e.quantity}</td>
-                <td>{e.agreement_number||'—'}</td>
+                <td>{e.agreement_name || '—'}</td>
                 <td><button className="btn-sm" onClick={() => setCustomForm({...e})}>Edit</button> <button className="btn-sm btn-danger" onClick={() => del(e.id)}>Delete</button></td></tr>
               ))}</tbody>
             </table>
@@ -704,8 +846,11 @@ function Entitlements() {
                 <option value="core_2pack">Core 2-Pack</option><option value="core">Core</option><option value="cal_device">CAL (Device)</option><option value="cal_user">CAL (User)</option>
               </select></label>
               <label>Quantity<input type="number" value={customForm.quantity} onChange={e => setCustomForm({...customForm, quantity: parseInt(e.target.value)||0})} /></label>
-              <label>Agreement #<input value={customForm.agreement_number||''} onChange={e => setCustomForm({...customForm, agreement_number: e.target.value})} /></label>
-              <label>Expiry<input type="date" value={customForm.expiry_date||''} onChange={e => setCustomForm({...customForm, expiry_date: e.target.value})} /></label>
+              <label>Agreement<select value={customForm.agreement_id||''} onChange={e => setCustomForm({...customForm, agreement_id: e.target.value ? parseInt(e.target.value) : null})}>
+                <option value="">— None —</option>
+                {agreements.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select></label>
+              <label>Notes<input value={customForm.notes||''} onChange={e => setCustomForm({...customForm, notes: e.target.value})} /></label>
             </div>
             <div className="modal-actions"><button className="btn btn-primary" onClick={saveCustom}>Save</button><button className="btn btn-secondary" onClick={() => setCustomForm(null)}>Cancel</button></div>
           </div>

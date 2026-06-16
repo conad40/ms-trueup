@@ -638,9 +638,12 @@ async def compliance_report():
 
             packs = math.ceil(total_cores / 2)
             entitled = await conn.fetchval("""
-                SELECT COALESCE(SUM(CASE WHEN license_type='core_2pack' THEN quantity*2
-                    WHEN license_type='core' THEN quantity ELSE 0 END), 0)
-                FROM entitlements WHERE product_family='WindowsServer' AND edition=$1
+                SELECT COALESCE(SUM(CASE WHEN e.license_type='core_2pack' THEN e.quantity*2
+                    WHEN e.license_type='core' THEN e.quantity ELSE 0 END), 0)
+                FROM entitlements e
+                LEFT JOIN agreements a ON a.id = e.agreement_id
+                WHERE e.product_family='WindowsServer' AND e.edition=$1
+                  AND (e.agreement_id IS NULL OR a.expiry_date IS NULL OR a.expiry_date >= CURRENT_DATE)
             """, edition)
 
             note = ""
@@ -725,9 +728,12 @@ async def compliance_report():
 
             packs = math.ceil(total_cores / 2)
             entitled = await conn.fetchval("""
-                SELECT COALESCE(SUM(CASE WHEN license_type='core_2pack' THEN quantity*2
-                    WHEN license_type='core' THEN quantity ELSE 0 END), 0)
-                FROM entitlements WHERE product_family='SQLServer' AND edition ILIKE $1
+                SELECT COALESCE(SUM(CASE WHEN e.license_type='core_2pack' THEN e.quantity*2
+                    WHEN e.license_type='core' THEN e.quantity ELSE 0 END), 0)
+                FROM entitlements e
+                LEFT JOIN agreements a ON a.id = e.agreement_id
+                WHERE e.product_family='SQLServer' AND e.edition ILIKE $1
+                  AND (e.agreement_id IS NULL OR a.expiry_date IS NULL OR a.expiry_date >= CURRENT_DATE)
             """, f"%{edition.split()[0]}%")
 
             gaps.append({
@@ -754,7 +760,13 @@ async def ws_licenses():
             FROM hosts WHERE status='active' AND os_name ILIKE '%server%'
             GROUP BY os_edition, is_virtual ORDER BY os_edition
         """)
-        ent = await conn.fetch("SELECT edition, license_type, SUM(quantity) as quantity FROM entitlements WHERE product_family='WindowsServer' GROUP BY edition, license_type")
+        ent = await conn.fetch("""
+            SELECT e.edition, e.license_type, SUM(e.quantity) as quantity FROM entitlements e
+            LEFT JOIN agreements a ON a.id = e.agreement_id
+            WHERE e.product_family='WindowsServer'
+              AND (e.agreement_id IS NULL OR a.expiry_date IS NULL OR a.expiry_date >= CURRENT_DATE)
+            GROUP BY e.edition, e.license_type
+        """)
         return {"discovered": [dict(r) for r in rows], "entitlements": [dict(r) for r in ent]}
 
 
@@ -766,7 +778,13 @@ async def sql_licenses():
             FROM sql_instances si JOIN hosts h ON h.id=si.host_id WHERE h.status='active'
             GROUP BY si.edition, si.version_name, si.license_model ORDER BY si.edition
         """)
-        ent = await conn.fetch("SELECT edition, license_type, SUM(quantity) as quantity FROM entitlements WHERE product_family='SQLServer' GROUP BY edition, license_type")
+        ent = await conn.fetch("""
+            SELECT e.edition, e.license_type, SUM(e.quantity) as quantity FROM entitlements e
+            LEFT JOIN agreements a ON a.id = e.agreement_id
+            WHERE e.product_family='SQLServer'
+              AND (e.agreement_id IS NULL OR a.expiry_date IS NULL OR a.expiry_date >= CURRENT_DATE)
+            GROUP BY e.edition, e.license_type
+        """)
         return {"discovered": [dict(r) for r in rows], "entitlements": [dict(r) for r in ent]}
 
 
@@ -782,10 +800,50 @@ async def product_summary():
 
 
 # ─── Entitlements CRUD ───
+# ─── Agreements ───
+@app.get("/api/agreements")
+async def list_agreements():
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM agreements ORDER BY expiry_date DESC NULLS LAST")
+        return {"agreements": [dict(r) for r in rows]}
+
+@app.post("/api/agreements")
+async def create_agreement(data: dict):
+    async with pool.acquire() as conn:
+        aid = await conn.fetchval("""
+            INSERT INTO agreements (name, agreement_number, agreement_type, start_date, expiry_date, notes)
+            VALUES ($1,$2,$3,$4,$5,$6) RETURNING id
+        """, data["name"], data.get("agreement_number"), data.get("agreement_type", "EA"),
+            data.get("start_date"), data.get("expiry_date"), data.get("notes"))
+    return {"status": "created", "id": aid}
+
+@app.put("/api/agreements/{aid}")
+async def update_agreement(aid: int, data: dict):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE agreements SET name=$2, agreement_number=$3, agreement_type=$4,
+                start_date=$5, expiry_date=$6, notes=$7 WHERE id=$1
+        """, aid, data["name"], data.get("agreement_number"), data.get("agreement_type", "EA"),
+            data.get("start_date"), data.get("expiry_date"), data.get("notes"))
+    return {"status": "updated"}
+
+@app.delete("/api/agreements/{aid}")
+async def delete_agreement(aid: int):
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM agreements WHERE id=$1", aid)
+    return {"status": "deleted"}
+
+# ─── Entitlements ───
 @app.get("/api/entitlements")
 async def list_entitlements():
     async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM entitlements ORDER BY product_family, edition")
+        rows = await conn.fetch("""
+            SELECT e.*, a.name as agreement_name, a.expiry_date as agreement_expiry,
+                   a.agreement_number as agr_number
+            FROM entitlements e
+            LEFT JOIN agreements a ON a.id = e.agreement_id
+            ORDER BY e.product_family, e.edition
+        """)
         return {"entitlements": [dict(r) for r in rows]}
 
 @app.post("/api/entitlements")
@@ -793,13 +851,15 @@ async def create_entitlement(data: dict):
     async with pool.acquire() as conn:
         await conn.execute("""
             INSERT INTO entitlements (product_name, product_family, edition, license_type,
-                quantity, agreement_number, agreement_type, effective_date, expiry_date, sa_included, notes)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                quantity, agreement_number, agreement_type, effective_date, expiry_date,
+                sa_included, notes, agreement_id, part_number)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
         """, data["product_name"], data.get("product_family"), data.get("edition"),
             data.get("license_type"), data["quantity"],
             data.get("agreement_number"), data.get("agreement_type"),
             data.get("effective_date"), data.get("expiry_date"),
-            data.get("sa_included", False), data.get("notes"))
+            data.get("sa_included", False), data.get("notes"),
+            data.get("agreement_id"), data.get("part_number"))
     return {"status": "created"}
 
 @app.put("/api/entitlements/{ent_id}")
@@ -808,12 +868,14 @@ async def update_entitlement(ent_id: int, data: dict):
         await conn.execute("""
             UPDATE entitlements SET product_name=$2, product_family=$3, edition=$4,
                 license_type=$5, quantity=$6, agreement_number=$7, agreement_type=$8,
-                effective_date=$9, expiry_date=$10, sa_included=$11, notes=$12 WHERE id=$1
+                effective_date=$9, expiry_date=$10, sa_included=$11, notes=$12,
+                agreement_id=$13, part_number=$14 WHERE id=$1
         """, ent_id, data["product_name"], data.get("product_family"), data.get("edition"),
             data.get("license_type"), data["quantity"],
             data.get("agreement_number"), data.get("agreement_type"),
             data.get("effective_date"), data.get("expiry_date"),
-            data.get("sa_included", False), data.get("notes"))
+            data.get("sa_included", False), data.get("notes"),
+            data.get("agreement_id"), data.get("part_number"))
     return {"status": "updated"}
 
 @app.delete("/api/entitlements/{ent_id}")
