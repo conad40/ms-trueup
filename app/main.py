@@ -812,8 +812,10 @@ async def trigger_scan(data: dict = None):
     scanners = (data or {}).get("scanners", ["all"])
     async with pool.acquire() as conn:
         scan_id = await conn.fetchval(
-            "INSERT INTO scan_log (scan_type, status) VALUES ($1, 'pending') RETURNING id",
+            "INSERT INTO scan_log (scan_type, status) VALUES ($1, 'running') RETURNING id",
             f"manual:{','.join(scanners)}")
+    # Run the scan in the background immediately
+    asyncio.create_task(_run_manual_scan(scan_id))
     return {"status": "triggered", "scan_id": scan_id, "scanners": scanners}
 
 
@@ -1311,13 +1313,28 @@ async def _mark_stale_hosts(conn, stale_days=30):
     """, stale_days)
 
 
+async def _run_manual_scan(scan_id: int):
+    """Execute a scan immediately for a manually triggered scan_id."""
+    try:
+        await _execute_scanners(scan_id)
+    except Exception as e:
+        log.error(f"Manual scan error: {e}")
+        async with pool.acquire() as conn:
+            await conn.execute("UPDATE scan_log SET status='error', error_message=$1 WHERE id=$2", str(e)[:1000], scan_id)
+
+
 async def _run_scan_cycle():
-    """Run all enabled scanners."""
+    """Run all enabled scanners on the scheduled interval."""
     log.info("Starting scan cycle")
     async with pool.acquire() as conn:
         scan_id = await conn.fetchval(
             "INSERT INTO scan_log (scan_type, status) VALUES ('scheduled', 'running') RETURNING id")
+    await _execute_scanners(scan_id)
 
+
+async def _execute_scanners(scan_id: int):
+    """Core scanner execution shared by manual and scheduled scans."""
+    log.info(f"Scan {scan_id}: starting scanners")
     total_scanned = 0
     total_failed = 0
     all_errors = []
@@ -1414,6 +1431,12 @@ async def _run_scan_cycle():
 async def collector_loop():
     """Background loop that runs scan cycles."""
     await asyncio.sleep(10)  # Wait for startup
+    # Clean up any stale pending scans from previous runs
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("UPDATE scan_log SET status='cancelled', completed_at=NOW() WHERE status IN ('pending','running')")
+    except Exception:
+        pass
     while True:
         try:
             async with pool.acquire() as conn:
