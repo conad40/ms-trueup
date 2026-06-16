@@ -1037,28 +1037,44 @@ async def check_updates():
 
 @app.post("/api/system/update")
 async def apply_update():
-    """Pull latest changes and signal for container rebuild."""
-    # Stash any local changes
+    """Pull latest changes, rebuild and restart the app container."""
+    # Pull from git (the .git volume is the host repo)
     _git("stash")
-    # Pull
     pull = _git("pull --ff-only")
     if not pull["ok"]:
         _git("stash pop")
         return {"status": "error", "message": pull["stderr"]}
-    # Get new version
     head = _git("rev-parse --short HEAD")
     # Log the update
     async with pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO app_versions (git_hash, git_branch, notes) VALUES ($1, $2, $3)",
             head["stdout"], _git("rev-parse --abbrev-ref HEAD")["stdout"], pull["stdout"])
+    # Trigger rebuild via Docker socket in background
+    # The host repo was already updated by git pull above (shared .git volume),
+    # so we shell out to docker compose on the host via the socket
+    asyncio.create_task(_rebuild_container())
     return {
         "status": "updated",
         "new_version": head["stdout"],
         "output": pull["stdout"],
-        "restart_required": True,
-        "restart_command": "docker-compose up -d --build app",
+        "rebuilding": True,
+        "message": "Pulling and rebuilding — the app will restart in ~30 seconds.",
     }
+
+
+async def _rebuild_container():
+    """Write a trigger file that the host-side update-watcher.sh picks up
+    and runs 'docker compose up -d --build app'."""
+    await asyncio.sleep(2)  # Let the HTTP response go out first
+    log.info("Writing rebuild trigger...")
+    try:
+        # .git is mounted from the host repo root, so ../. is the project dir
+        trigger = Path("/app/.git") / ".." / ".rebuild-trigger"
+        trigger.resolve().write_text(str(datetime.now(timezone.utc)))
+        log.info("Rebuild trigger written — watcher will rebuild shortly")
+    except Exception as e:
+        log.error(f"Failed to write trigger: {e}")
 
 
 @app.get("/api/system/update-history")
