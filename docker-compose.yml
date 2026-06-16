@@ -37,7 +37,7 @@ services:
     volumes:
       - ./db/migrations:/app/migrations:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./.git:/app/.git:ro
+      - ./.git:/app/.git
 
 volumes:
   pgdata:
