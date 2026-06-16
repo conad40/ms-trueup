@@ -9,7 +9,7 @@ log = logging.getLogger("trueup.vcenter")
 def _connect(host, user, password, port=443, verify_ssl=False):
     """Connect to vCenter and return ServiceInstance."""
     from pyVmomi import vim
-    from pyVmomi.connect import SmartConnect, Disconnect
+    from pyVim.connect import SmartConnect, Disconnect
     ctx = None
     if not verify_ssl:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
