@@ -434,7 +434,8 @@ function CredentialsTab() {
               <label>Type<select value={form.cred_type} onChange={e => setForm({...form, cred_type: e.target.value})}><option value="winrm">WinRM</option><option value="vcenter">vCenter</option><option value="snmp">SNMP</option></select></label>
               <label>Username<input value={form.username||''} onChange={e => setForm({...form, username: e.target.value})} /></label>
               <label>Password<input type="password" value={form.password||''} onChange={e => setForm({...form, password: e.target.value})} /></label>
-              <label>Domain<input value={form.domain||''} onChange={e => setForm({...form, domain: e.target.value})} /></label>
+              <label>Domain<input value={form.domain||''} onChange={e => setForm({...form, domain: e.target.value})}
+                disabled={/[@\\]/.test(form.username||'')} placeholder={/[@\\]/.test(form.username||'')?'Domain included in username':''} /></label>
             </div>
             <div className="modal-actions"><button className="btn btn-primary" onClick={save}>Save</button><button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button></div>
           </div>
