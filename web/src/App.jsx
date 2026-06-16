@@ -543,59 +543,171 @@ function Compliance() {
 // ════════════════════════════════════════════════════════════════
 // Entitlements
 // ════════════════════════════════════════════════════════════════
+// Standard MS EA part numbers — the stuff that shows up on every EA true-up
+const MS_PARTS = [
+  { part: '9GS-00495', desc: 'CIS Suite Datacenter Core ALng LSA 2L', family: 'WindowsServer', edition: 'Datacenter', type: 'core_2pack' },
+  { part: '9GA-00006', desc: 'CIS Suite Standard Core ALng LSA 2L', family: 'WindowsServer', edition: 'Standard', type: 'core_2pack' },
+  { part: '7JQ-00341', desc: 'SQL Server Enterprise Core ALng LSA 2L', family: 'SQLServer', edition: 'Enterprise', type: 'core_2pack' },
+  { part: '7NQ-00302', desc: 'SQL Server Standard Core ALng LSA 2L', family: 'SQLServer', edition: 'Standard', type: 'core_2pack' },
+  { part: 'R39-00374', desc: 'Win Server External Connector ALng LSA', family: 'WindowsServer', edition: 'ExternalConnector', type: 'core' },
+  { part: '6ZH-00477', desc: 'System Center Standard Core ALng LSA 2L', family: 'SystemCenter', edition: 'Standard', type: 'core_2pack' },
+  { part: '9EP-00352', desc: 'System Center Datacenter Core ALng LSA 2L', family: 'SystemCenter', edition: 'Datacenter', type: 'core_2pack' },
+  { part: '228-04437', desc: 'SQL Server CAL ALng LSA Device', family: 'SQLServer', edition: 'Standard', type: 'cal_device' },
+  { part: '6VC-01251', desc: 'Win Server CAL ALng LSA Device', family: 'WindowsServer', edition: 'Standard', type: 'cal_device' },
+  { part: '6VC-01252', desc: 'Win Server CAL ALng LSA User', family: 'WindowsServer', edition: 'Standard', type: 'cal_user' },
+  { part: 'R18-03499', desc: 'Win Server RDS CAL ALng LSA Device', family: 'WindowsServer', edition: 'RDS', type: 'cal_device' },
+  { part: 'R18-03500', desc: 'Win Server RDS CAL ALng LSA User', family: 'WindowsServer', edition: 'RDS', type: 'cal_user' },
+];
+
 function Entitlements() {
   const { data, loading, reload } = useFetch('/entitlements');
-  const [form, setForm] = useState(null);
+  const [editing, setEditing] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [showCustom, setShowCustom] = useState(false);
+  const [customForm, setCustomForm] = useState(null);
 
-  const save = async () => {
-    const method = form.id ? 'PUT' : 'POST';
-    const url = form.id ? `${API}/entitlements/${form.id}` : `${API}/entitlements`;
-    await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
-    setForm(null); reload();
+  // Build a lookup from (family+edition+type) → existing entitlement
+  const ents = data?.entitlements || [];
+  const entMap = {};
+  ents.forEach(e => {
+    const key = `${e.product_family}|${e.edition}|${e.license_type}`;
+    entMap[key] = e;
+  });
+
+  const getQty = (part) => {
+    const key = `${part.family}|${part.edition}|${part.type}`;
+    if (editing[key] !== undefined) return editing[key];
+    const existing = entMap[key];
+    return existing ? existing.quantity : 0;
   };
 
-  const del = async (id) => {
-    if (!confirm('Delete?')) return;
-    await fetch(`${API}/entitlements/${id}`, { method: 'DELETE' });
+  const setQty = (part, val) => {
+    const key = `${part.family}|${part.edition}|${part.type}`;
+    setEditing({...editing, [key]: parseInt(val) || 0});
+  };
+
+  const saveAll = async () => {
+    setSaving(true);
+    for (const [key, qty] of Object.entries(editing)) {
+      const [family, edition, type] = key.split('|');
+      const existing = entMap[key];
+      const partInfo = MS_PARTS.find(p => p.family === family && p.edition === edition && p.type === type);
+      const productName = partInfo ? partInfo.desc : `${family} ${edition}`;
+      if (existing) {
+        await fetch(`${API}/entitlements/${existing.id}`, {
+          method: 'PUT', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({...existing, quantity: qty})
+        });
+      } else if (qty > 0) {
+        await fetch(`${API}/entitlements`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ product_name: productName, product_family: family, edition, license_type: type, quantity: qty })
+        });
+      }
+    }
+    setEditing({});
+    setSaving(false);
     reload();
   };
 
+  const saveCustom = async () => {
+    const method = customForm.id ? 'PUT' : 'POST';
+    const url = customForm.id ? `${API}/entitlements/${customForm.id}` : `${API}/entitlements`;
+    await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(customForm) });
+    setCustomForm(null); reload();
+  };
+
+  const del = async (id) => {
+    if (!confirm('Delete this entitlement?')) return;
+    await fetch(`${API}/entitlements/${id}`, { method: 'DELETE' }); reload();
+  };
+
   if (loading || !data) return <Spinner />;
-  const ents = data.entitlements || [];
+
+  // Find custom entitlements (ones not matching any standard part)
+  const standardKeys = new Set(MS_PARTS.map(p => `${p.family}|${p.edition}|${p.type}`));
+  const customEnts = ents.filter(e => !standardKeys.has(`${e.product_family}|${e.edition}|${e.license_type}`));
+  const hasChanges = Object.keys(editing).length > 0;
 
   return (
     <div>
       <div className="page-header">
         <h1>Entitlements</h1>
-        <button className="btn btn-primary" onClick={() => setForm({ product_name: '', product_family: 'WindowsServer', edition: 'Standard', license_type: 'core_2pack', quantity: 1 })}>+ Add</button>
+        <div className="header-actions">
+          {hasChanges && <button className="btn btn-primary" onClick={saveAll} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</button>}
+          <button className="btn btn-secondary" onClick={() => setShowCustom(!showCustom)}>{showCustom ? 'Hide Custom' : '+ Custom Entitlement'}</button>
+        </div>
       </div>
+
+      <p style={{color:'var(--text-secondary)',marginBottom:'1rem',fontSize:'0.85rem'}}>
+        Enter the quantity of two-core packs (or CALs) from your Microsoft EA agreement. These are the standard part numbers — just fill in how many you have.
+      </p>
+
       <table className="data-table">
-        <thead><tr><th>Product</th><th>Family</th><th>Edition</th><th>Type</th><th>Qty</th><th>Agreement</th><th>Expiry</th><th>Actions</th></tr></thead>
-        <tbody>{ents.map(e => (
-          <tr key={e.id}><td>{e.product_name}</td><td>{e.product_family}</td><td>{e.edition}</td><td>{e.license_type}</td><td>{e.quantity}</td>
-          <td>{e.agreement_number}</td><td>{e.expiry_date || '—'}</td>
-          <td><button className="btn-sm" onClick={() => setForm({...e})}>Edit</button> <button className="btn-sm btn-danger" onClick={() => del(e.id)}>Delete</button></td></tr>
-        ))}</tbody>
+        <thead>
+          <tr><th>Part #</th><th>Description</th><th>Product</th><th>Edition</th><th>License Type</th><th style={{width:'100px'}}>Quantity</th></tr>
+        </thead>
+        <tbody>
+          {MS_PARTS.map(p => {
+            const key = `${p.family}|${p.edition}|${p.type}`;
+            const existing = entMap[key];
+            const qty = getQty(p);
+            const changed = editing[key] !== undefined && editing[key] !== (existing?.quantity || 0);
+            return (
+              <tr key={p.part} style={changed ? {background:'#ecfeff'} : {}}>
+                <td><code>{p.part}</code></td>
+                <td style={{fontSize:'0.8rem',color:'var(--text-secondary)'}}>{p.desc}</td>
+                <td>{p.family === 'WindowsServer' ? 'Windows Server' : p.family === 'SQLServer' ? 'SQL Server' : p.family}</td>
+                <td>{p.edition}</td>
+                <td>{p.type === 'core_2pack' ? 'Core 2-Pack' : p.type === 'cal_device' ? 'CAL (Device)' : p.type === 'cal_user' ? 'CAL (User)' : p.type}</td>
+                <td>
+                  <input type="number" min="0" value={qty} onChange={e => setQty(p, e.target.value)}
+                    style={{width:'80px',padding:'0.35rem 0.5rem',textAlign:'center',fontWeight:600,fontSize:'0.9rem'}} />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
       </table>
-      {form && (
-        <div className="modal-overlay" onMouseDown={e => { if (e.target === e.currentTarget) setForm(null); }}>
+
+      {/* Custom entitlements */}
+      {(showCustom || customEnts.length > 0) && (
+        <div style={{marginTop:'1.5rem'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'0.75rem'}}>
+            <h2>Custom Entitlements</h2>
+            <button className="btn btn-primary" onClick={() => setCustomForm({ product_name: '', product_family: 'WindowsServer', edition: 'Standard', license_type: 'core_2pack', quantity: 1 })}>+ Add Custom</button>
+          </div>
+          {customEnts.length > 0 && (
+            <table className="data-table">
+              <thead><tr><th>Product</th><th>Family</th><th>Edition</th><th>Type</th><th>Qty</th><th>Agreement</th><th>Actions</th></tr></thead>
+              <tbody>{customEnts.map(e => (
+                <tr key={e.id}><td>{e.product_name}</td><td>{e.product_family}</td><td>{e.edition}</td><td>{e.license_type}</td><td>{e.quantity}</td>
+                <td>{e.agreement_number||'—'}</td>
+                <td><button className="btn-sm" onClick={() => setCustomForm({...e})}>Edit</button> <button className="btn-sm btn-danger" onClick={() => del(e.id)}>Delete</button></td></tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {customForm && (
+        <div className="modal-overlay" onMouseDown={e => { if (e.target === e.currentTarget) setCustomForm(null); }}>
           <div className="modal">
-            <h3>{form.id ? 'Edit' : 'Add'} Entitlement</h3>
+            <h3>{customForm.id ? 'Edit' : 'Add'} Custom Entitlement</h3>
             <div className="form-grid">
-              <label>Product<input value={form.product_name} onChange={e => setForm({...form, product_name: e.target.value})} /></label>
-              <label>Family<select value={form.product_family||''} onChange={e => setForm({...form, product_family: e.target.value})}>
-                <option value="WindowsServer">Windows Server</option><option value="SQLServer">SQL Server</option><option value="Office">Office</option><option value="Other">Other</option>
+              <label>Product Name<input value={customForm.product_name} onChange={e => setCustomForm({...customForm, product_name: e.target.value})} /></label>
+              <label>Family<select value={customForm.product_family||''} onChange={e => setCustomForm({...customForm, product_family: e.target.value})}>
+                <option value="WindowsServer">Windows Server</option><option value="SQLServer">SQL Server</option><option value="SystemCenter">System Center</option><option value="Office">Office</option><option value="Other">Other</option>
               </select></label>
-              <label>Edition<input value={form.edition||''} onChange={e => setForm({...form, edition: e.target.value})} /></label>
-              <label>License Type<select value={form.license_type||''} onChange={e => setForm({...form, license_type: e.target.value})}>
+              <label>Edition<input value={customForm.edition||''} onChange={e => setCustomForm({...customForm, edition: e.target.value})} /></label>
+              <label>License Type<select value={customForm.license_type||''} onChange={e => setCustomForm({...customForm, license_type: e.target.value})}>
                 <option value="core_2pack">Core 2-Pack</option><option value="core">Core</option><option value="cal_device">CAL (Device)</option><option value="cal_user">CAL (User)</option>
               </select></label>
-              <label>Quantity<input type="number" value={form.quantity} onChange={e => setForm({...form, quantity: parseInt(e.target.value)||0})} /></label>
-              <label>Agreement #<input value={form.agreement_number||''} onChange={e => setForm({...form, agreement_number: e.target.value})} /></label>
-              <label>Expiry<input type="date" value={form.expiry_date||''} onChange={e => setForm({...form, expiry_date: e.target.value})} /></label>
-              <label className="checkbox-label"><input type="checkbox" checked={form.sa_included||false} onChange={e => setForm({...form, sa_included: e.target.checked})} /> SA Included</label>
+              <label>Quantity<input type="number" value={customForm.quantity} onChange={e => setCustomForm({...customForm, quantity: parseInt(e.target.value)||0})} /></label>
+              <label>Agreement #<input value={customForm.agreement_number||''} onChange={e => setCustomForm({...customForm, agreement_number: e.target.value})} /></label>
+              <label>Expiry<input type="date" value={customForm.expiry_date||''} onChange={e => setCustomForm({...customForm, expiry_date: e.target.value})} /></label>
             </div>
-            <div className="modal-actions"><button className="btn btn-primary" onClick={save}>Save</button><button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button></div>
+            <div className="modal-actions"><button className="btn btn-primary" onClick={saveCustom}>Save</button><button className="btn btn-secondary" onClick={() => setCustomForm(null)}>Cancel</button></div>
           </div>
         </div>
       )}
