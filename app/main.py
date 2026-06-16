@@ -1357,7 +1357,11 @@ async def _execute_scanners(scan_id: int):
                     cred_map = {}
                     if cred_ids:
                         cred_rows = await conn.fetch("SELECT * FROM credentials WHERE id = ANY($1::int[]) AND enabled=TRUE", list(cred_ids))
-                        cred_map = {r["id"]: dict(r) for r in cred_rows}
+                        for r in cred_rows:
+                            cr = dict(r)
+                            cr["password"] = decrypt_value(cr.get("password", ""))
+                            cr["community"] = decrypt_value(cr.get("community", ""))
+                            cred_map[cr["id"]] = cr
 
                     from scanners import winrm as winrm_scanner
                     s, f, e = await winrm_scanner.scan(pool, [dict(t) for t in targets], cred)
@@ -1374,27 +1378,30 @@ async def _execute_scanners(scan_id: int):
                 total_scanned += s; total_failed += f; all_errors.extend(e)
 
             # ── vCenter ──
-            vcenter_enabled = await _get_setting(conn, "vcenter_enabled", "false")
-            if vcenter_enabled.lower() == "true":
-                instances = await conn.fetch("SELECT * FROM vcenter_instances WHERE enabled=TRUE")
-                if instances:
-                    inst_list = []
-                    for inst in instances:
-                        d = dict(inst)
-                        if d.get("credential_id"):
-                            cred_row = await conn.fetchrow("SELECT * FROM credentials WHERE id=$1", d["credential_id"])
-                            d["_credential"] = dict(cred_row) if cred_row else {}
+            instances = await conn.fetch("SELECT * FROM vcenter_instances WHERE enabled=TRUE")
+            if instances:
+                inst_list = []
+                for inst in instances:
+                    d = dict(inst)
+                    if d.get("credential_id"):
+                        cred_row = await conn.fetchrow("SELECT * FROM credentials WHERE id=$1", d["credential_id"])
+                        if cred_row:
+                            cr = dict(cred_row)
+                            cr["password"] = decrypt_value(cr.get("password", ""))
+                            d["_credential"] = cr
                         else:
-                            d["_credential"] = {
-                                "username": await _get_setting(conn, "vcenter_user"),
-                                "password": await _get_setting(conn, "vcenter_password"),
-                                "port": int(await _get_setting(conn, "vcenter_port", "443")),
-                                "verify_ssl": await _get_setting(conn, "vcenter_verify_ssl", "false") == "true",
-                            }
-                        inst_list.append(d)
-                    from scanners import vcenter as vcenter_scanner
-                    s, f, e = await vcenter_scanner.scan(pool, inst_list)
-                    total_scanned += s; total_failed += f; all_errors.extend(e)
+                            d["_credential"] = {}
+                    else:
+                        d["_credential"] = {
+                            "username": await _get_setting(conn, "vcenter_user"),
+                            "password": await _get_setting(conn, "vcenter_password"),
+                            "port": int(await _get_setting(conn, "vcenter_port", "443")),
+                            "verify_ssl": await _get_setting(conn, "vcenter_verify_ssl", "false") == "true",
+                        }
+                    inst_list.append(d)
+                from scanners import vcenter as vcenter_scanner
+                s, f, e = await vcenter_scanner.scan(pool, inst_list)
+                total_scanned += s; total_failed += f; all_errors.extend(e)
 
             # ── SNMP ──
             snmp_enabled = await _get_setting(conn, "snmp_enabled", "false")
