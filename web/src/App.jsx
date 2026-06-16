@@ -32,6 +32,7 @@ const PAGES = [
   { id: 'scanners', label: 'Scanners', icon: '🔍' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
   { id: 'scripts', label: 'Scripts', icon: '📥' },
+  { id: 'logs', label: 'Logs', icon: '📋' },
   { id: 'updates', label: 'System Update', icon: '🔄' },
 ];
 
@@ -633,15 +634,12 @@ function ApiKeysSection() {
 // ════════════════════════════════════════════════════════════════
 function ScriptsPage() {
   const { data, loading } = useFetch('/scripts');
-  const keys = useFetch('/api-keys');
   const [selectedKey, setSelectedKey] = useState('');
 
   if (loading || !data) return <Spinner />;
 
-  const activeKeys = (keys.data?.api_keys || []).filter(k => k.status === 'active');
-
   const download = (scriptId) => {
-    const params = selectedKey ? `?api_key=${encodeURIComponent(selectedKey)}` : '';
+    const params = selectedKey ? `?key=${encodeURIComponent(selectedKey)}` : '';
     window.open(`${API}/scripts/${scriptId}/download${params}`);
   };
 
@@ -653,19 +651,12 @@ function ScriptsPage() {
       <p style={{marginBottom:'1rem',color:'var(--text-secondary,#666)'}}>Download pre-configured PowerShell scripts for inventory collection. Scripts are automatically configured with your server URL and the API key you select below.</p>
 
       <div className="card" style={{padding:'1rem',marginBottom:'1.5rem'}}>
-        <label style={{display:'flex',alignItems:'center',gap:'0.75rem'}}>
+        <label style={{display:'flex',alignItems:'center',gap:'0.75rem',flexWrap:'wrap'}}>
           <strong>Embed API Key:</strong>
-          {activeKeys.length > 0 ? (
-            <select value={selectedKey} onChange={e => setSelectedKey(e.target.value)} style={{flex:1,maxWidth:'400px'}}>
-              <option value="">— None (you'll paste manually) —</option>
-              {activeKeys.map(k => <option key={k.id} value={k.key_prefix}>Can't embed — copy from Settings</option>)}
-            </select>
-          ) : (
-            <span style={{color:'#e53935'}}>No active API keys. Create one in Settings first.</span>
-          )}
           <input type="text" value={selectedKey} onChange={e => setSelectedKey(e.target.value)}
-            placeholder="Paste your API key here" style={{flex:1,maxWidth:'400px'}} />
+            placeholder="Paste your API key here (from Settings → API Keys)" style={{flex:1,minWidth:'300px',maxWidth:'500px'}} />
         </label>
+        {!selectedKey && <p style={{margin:'0.5rem 0 0',fontSize:'0.85rem',color:'#e65100'}}>No key entered — downloaded scripts will need the key pasted manually.</p>}
       </div>
 
       <div style={{display:'grid',gap:'1rem'}}>
@@ -687,6 +678,113 @@ function ScriptsPage() {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Logs
+// ════════════════════════════════════════════════════════════════
+function LogsPage() {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('');
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [scanErrors, setScanErrors] = useState(null);
+  const scans = useFetch('/scans');
+
+  const fetchLogs = useCallback(async () => {
+    const params = filter ? `?level=${filter}` : '';
+    const res = await fetch(`${API}/logs${params}`);
+    const d = await res.json();
+    setLogs(d.logs || []);
+    setLoading(false);
+  }, [filter]);
+
+  useEffect(() => { fetchLogs(); }, [fetchLogs]);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(fetchLogs, 5000);
+    return () => clearInterval(id);
+  }, [autoRefresh, fetchLogs]);
+
+  const loadScanErrors = async (scanId) => {
+    const res = await fetch(`${API}/scans/${scanId}/errors`);
+    const d = await res.json();
+    setScanErrors({ scanId, errors: d.errors || [] });
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Logs</h1>
+        <div style={{display:'flex',gap:'0.5rem',alignItems:'center'}}>
+          <select value={filter} onChange={e => setFilter(e.target.value)}>
+            <option value="">All Levels</option>
+            <option value="ERROR">Errors</option>
+            <option value="WARNING">Warnings</option>
+            <option value="INFO">Info</option>
+          </select>
+          <label style={{display:'flex',alignItems:'center',gap:'0.25rem',fontSize:'0.9rem'}}>
+            <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} /> Auto-refresh
+          </label>
+          <button className="btn btn-secondary" onClick={fetchLogs}>Refresh</button>
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1.5rem'}}>
+        <div>
+          <h3>Application Log</h3>
+          {loading ? <Spinner /> : (
+            <div style={{background:'#1e1e1e',color:'#d4d4d4',padding:'1rem',borderRadius:'6px',
+              fontFamily:'monospace',fontSize:'0.8rem',maxHeight:'500px',overflowY:'auto',whiteSpace:'pre-wrap'}}>
+              {logs.length === 0 ? <span style={{color:'#888'}}>No log entries</span> :
+                logs.map((l, i) => (
+                  <div key={i} style={{color: l.includes('[ERROR]') ? '#f44336' : l.includes('[WARNING]') ? '#ff9800' : '#d4d4d4',
+                    borderBottom:'1px solid #333',padding:'2px 0'}}>{l}</div>
+                ))
+              }
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h3>Scan History</h3>
+          {scans.loading ? <Spinner /> : (
+            <table className="data-table" style={{fontSize:'0.85rem'}}>
+              <thead><tr><th>ID</th><th>Type</th><th>Started</th><th>Status</th><th>OK/Fail</th><th></th></tr></thead>
+              <tbody>{(scans.data?.scans||[]).map(s => (
+                <tr key={s.id}>
+                  <td>{s.id}</td>
+                  <td>{s.scan_type}</td>
+                  <td>{new Date(s.started_at).toLocaleString()}</td>
+                  <td><Badge color={s.status==='completed'?'green':s.status==='error'?'red':'yellow'}>{s.status}</Badge></td>
+                  <td>{s.hosts_scanned}/{s.hosts_failed}</td>
+                  <td>{s.hosts_failed > 0 && <button className="btn-sm" onClick={() => loadScanErrors(s.id)}>Errors</button>}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+
+          {scanErrors && (
+            <div style={{marginTop:'1rem'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <h4>Scan #{scanErrors.scanId} Errors</h4>
+                <button className="btn-sm" onClick={() => setScanErrors(null)}>Close</button>
+              </div>
+              {scanErrors.errors.length === 0 ? <p style={{color:'#888'}}>No error details recorded.</p> : (
+                <table className="data-table" style={{fontSize:'0.85rem'}}>
+                  <thead><tr><th>Host</th><th>Type</th><th>Message</th></tr></thead>
+                  <tbody>{scanErrors.errors.map(e => (
+                    <tr key={e.id}><td>{e.hostname}</td><td>{e.error_type}</td><td style={{maxWidth:'300px',overflow:'hidden',textOverflow:'ellipsis'}}>{e.error_message}</td></tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -797,7 +895,7 @@ function SystemUpdate() {
 // ════════════════════════════════════════════════════════════════
 export default function App() {
   const [page, setPage] = useState('dashboard');
-  const pages = { dashboard: Dashboard, hosts: Hosts, compliance: Compliance, entitlements: Entitlements, scanners: Scanners, settings: Settings, scripts: ScriptsPage, updates: SystemUpdate };
+  const pages = { dashboard: Dashboard, hosts: Hosts, compliance: Compliance, entitlements: Entitlements, scanners: Scanners, settings: Settings, scripts: ScriptsPage, logs: LogsPage, updates: SystemUpdate };
   const Page = pages[page] || Dashboard;
   return (
     <div className="app-layout">

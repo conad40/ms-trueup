@@ -6,7 +6,7 @@ Single FastAPI service that:
 - Runs scanner modules as background tasks
 - Supports git-based self-updates from the web UI
 """
-import os, math, io, glob, subprocess, asyncio, logging, secrets, hashlib
+import os, math, io, re, glob, subprocess, asyncio, logging, secrets, hashlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1198,43 +1198,39 @@ async def list_scripts():
     return {"scripts": result}
 
 @app.get("/api/scripts/{script_id}/download")
-async def download_script(script_id: str, request: Request, api_key: str = Query(default="")):
-    """Download a script with server URL and API key pre-configured.
-
-    Pass ?api_key=<key> to embed a specific key. The UI sends the key
-    chosen by the user so the downloaded script is ready to run.
-    """
+async def download_script(script_id: str, request: Request, key: str = Query(default="")):
+    """Download a script with server URL and API key pre-configured."""
     entry = next((s for s in SCRIPT_CATALOG if s["id"] == script_id), None)
     if not entry:
         raise HTTPException(404, "Script not found")
     script_path = SCRIPTS_DIR / entry["filename"]
     if not script_path.is_file():
-        raise HTTPException(404, "Script file not found on server")
+        raise HTTPException(404, f"Script file not found: {entry['filename']}")
 
     content = script_path.read_text(encoding="utf-8")
 
-    # Derive server URL from the incoming request (what the browser actually used)
+    # Derive server URL from the incoming request
     host_header = request.headers.get("host", "")
     scheme = request.headers.get("x-forwarded-proto", "http")
     server_url = f"{scheme}://{host_header}" if host_header else "http://localhost:3000"
 
-    # Replace default values in the param blocks
-    import re
+    # Replace ApiUrl wherever it appears as a param default
     content = re.sub(
-        r'\[string\]\$ApiUrl\s*=\s*"[^"]*"',
-        f'[string]$ApiUrl = "{server_url}"',
+        r'(\[string\]\$ApiUrl\s*=\s*)"[^"]*"',
+        rf'\g<1>"{server_url}"',
         content
     )
-    if api_key:
+    # Replace ApiKey
+    if key:
         content = re.sub(
-            r'\[string\]\$ApiKey\s*=\s*"[^"]*"',
-            f'[string]$ApiKey = "{api_key}"',
+            r'(\[string\]\$ApiKey\s*=\s*)"[^"]*"',
+            rf'\g<1>"{key}"',
             content
         )
     else:
         content = re.sub(
-            r'\[string\]\$ApiKey\s*=\s*"[^"]*"',
-            '[string]$ApiKey = "PASTE_YOUR_API_KEY_HERE"',
+            r'(\[string\]\$ApiKey\s*=\s*)"[^"]*"',
+            r'\g<1>"PASTE_YOUR_API_KEY_HERE"',
             content
         )
 
@@ -1243,6 +1239,41 @@ async def download_script(script_id: str, request: Request, api_key: str = Query
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{entry["filename"]}"'}
     )
+
+
+# ─── Logs ───
+_log_buffer: list[str] = []
+_LOG_BUFFER_MAX = 2000
+
+class _BufferedLogHandler(logging.Handler):
+    """Captures log records into an in-memory ring buffer for the UI."""
+    def emit(self, record):
+        line = self.format(record)
+        _log_buffer.append(line)
+        if len(_log_buffer) > _LOG_BUFFER_MAX:
+            del _log_buffer[:len(_log_buffer) - _LOG_BUFFER_MAX]
+
+# Install the handler on startup
+_buf_handler = _BufferedLogHandler()
+_buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logging.getLogger("trueup").addHandler(_buf_handler)
+
+@app.get("/api/logs")
+async def get_logs(lines: int = 200, level: str = ""):
+    """Return recent application log lines."""
+    result = _log_buffer[-lines:]
+    if level:
+        level = level.upper()
+        result = [l for l in result if f"[{level}]" in l]
+    return {"logs": result, "total": len(_log_buffer)}
+
+@app.get("/api/scans/{scan_id}/errors")
+async def scan_errors(scan_id: int):
+    """Return detailed errors for a specific scan."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM scan_errors WHERE scan_id=$1 ORDER BY created_at", scan_id)
+        return {"errors": [dict(r) for r in rows]}
 
 
 # ════════════════════════════════════════════════════════════════
