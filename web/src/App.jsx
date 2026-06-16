@@ -31,6 +31,7 @@ const PAGES = [
   { id: 'entitlements', label: 'Entitlements', icon: '📜' },
   { id: 'scanners', label: 'Scanners', icon: '🔍' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
+  { id: 'scripts', label: 'Scripts', icon: '📥' },
   { id: 'updates', label: 'System Update', icon: '🔄' },
 ];
 
@@ -558,6 +559,47 @@ function Settings() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// Scripts (download collection scripts)
+// ════════════════════════════════════════════════════════════════
+function ScriptsPage() {
+  const { data, loading } = useFetch('/scripts');
+
+  if (loading || !data) return <Spinner />;
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Collection Scripts</h1>
+      </div>
+      <p style={{marginBottom:'1rem',color:'var(--text-secondary,#666)'}}>Download pre-configured PowerShell scripts for inventory collection. Scripts are automatically configured with your server URL and API key.</p>
+      <div style={{display:'grid',gap:'1rem'}}>
+        {(data.scripts||[]).map(s => (
+          <div key={s.id} className="card" style={{padding:'1.25rem'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div>
+                <h3 style={{margin:0}}>{s.name}</h3>
+                <p style={{margin:'0.5rem 0',color:'var(--text-secondary,#666)'}}>{s.description}</p>
+                <div style={{fontSize:'0.85rem',color:'var(--text-secondary,#888)'}}>
+                  <strong>Install:</strong> {s.install}
+                </div>
+              </div>
+              <button className="btn btn-primary" disabled={!s.available}
+                onClick={() => window.open(`${API}/scripts/${s.id}/download`)}
+                style={{whiteSpace:'nowrap',marginLeft:'1rem'}}>
+                {s.available ? '⬇ Download' : 'Unavailable'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="info-box" style={{marginTop:'1.5rem'}}>
+        <strong>Note:</strong> Make sure you've generated an Agent API Key in Settings before deploying these scripts. The downloaded scripts will have your current server URL and API key pre-filled.
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
 // System Update
 // ════════════════════════════════════════════════════════════════
 function SystemUpdate() {
@@ -662,7 +704,7 @@ function SystemUpdate() {
 // ════════════════════════════════════════════════════════════════
 export default function App() {
   const [page, setPage] = useState('dashboard');
-  const pages = { dashboard: Dashboard, hosts: Hosts, compliance: Compliance, entitlements: Entitlements, scanners: Scanners, settings: Settings, updates: SystemUpdate };
+  const pages = { dashboard: Dashboard, hosts: Hosts, compliance: Compliance, entitlements: Entitlements, scanners: Scanners, settings: Settings, scripts: ScriptsPage, updates: SystemUpdate };
   const Page = pages[page] || Dashboard;
   return (
     <div className="app-layout">

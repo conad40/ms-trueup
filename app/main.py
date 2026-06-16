@@ -15,7 +15,7 @@ import asyncpg
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, Query, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
@@ -1082,6 +1082,94 @@ async def update_history():
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM app_versions ORDER BY updated_at DESC LIMIT 20")
         return {"history": [dict(r) for r in rows]}
+
+
+# ─── Script Downloads ───
+SCRIPTS_DIR = Path(__file__).parent / "scripts"
+if not SCRIPTS_DIR.is_dir():
+    SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
+
+SCRIPT_CATALOG = [
+    {
+        "id": "agent",
+        "name": "TrueUp Agent",
+        "filename": "TrueUp-Agent.ps1",
+        "description": "Runs locally on each Windows Server as a scheduled task. Collects OS, CPU, SQL, and product inventory then POSTs to the API. No WinRM or firewall rules needed.",
+        "install": "Deploy via GPO or run the Deploy script. Creates a daily scheduled task running as SYSTEM.",
+    },
+    {
+        "id": "deploy-agent",
+        "name": "Agent Deploy Script",
+        "filename": "Deploy-TrueUpAgent.ps1",
+        "description": "Installs TrueUp-Agent.ps1 as a daily scheduled task on the local server. Idempotent — safe to run multiple times.",
+        "install": "Run as Administrator on each server, or push via GPO startup script.",
+    },
+    {
+        "id": "scvmm",
+        "name": "SCVMM Collector",
+        "filename": "TrueUp-SCVMM.ps1",
+        "description": "Queries System Center VMM for all Hyper-V hosts and VMs, then pushes inventory to the API. Run on the SCVMM server.",
+        "install": "Schedule as a daily task on your SCVMM management server. Requires the VirtualMachineManager PowerShell module.",
+    },
+    {
+        "id": "enable-winrm",
+        "name": "Enable WinRM",
+        "filename": "enable-winrm.ps1",
+        "description": "Enables and configures WinRM on target servers for remote scanning.",
+        "install": "Run as Administrator on target servers or push via GPO.",
+    },
+]
+
+@app.get("/api/scripts")
+async def list_scripts():
+    """Return catalog of available scripts with availability status."""
+    result = []
+    for s in SCRIPT_CATALOG:
+        info = dict(s)
+        info["available"] = (SCRIPTS_DIR / s["filename"]).is_file()
+        result.append(info)
+    return {"scripts": result}
+
+@app.get("/api/scripts/{script_id}/download")
+async def download_script(script_id: str):
+    """Download a script with server URL and API key pre-configured."""
+    entry = next((s for s in SCRIPT_CATALOG if s["id"] == script_id), None)
+    if not entry:
+        raise HTTPException(404, "Script not found")
+    script_path = SCRIPTS_DIR / entry["filename"]
+    if not script_path.is_file():
+        raise HTTPException(404, "Script file not found on server")
+
+    content = script_path.read_text(encoding="utf-8")
+
+    # Inject current server URL and API key
+    async with pool.acquire() as conn:
+        api_key = await conn.fetchval("SELECT value FROM settings WHERE key='agent_api_key'")
+
+    # Build the server URL from the request context (fallback to hostname)
+    import socket
+    server_host = socket.getfqdn()
+    server_url = f"http://{server_host}:3000"
+
+    if api_key:
+        api_key = decrypt_value(api_key)
+
+    # Replace default values in the param blocks
+    content = content.replace(
+        '[string]$ApiUrl = "http://xdcvudocker01.emplify.org:8000"',
+        f'[string]$ApiUrl = "{server_url}"'
+    )
+    if api_key:
+        content = content.replace(
+            '[string]$ApiKey = "0CJo79gwVOEewsE53PzgrY93crCGsWXMjd0F6knt1p8"',
+            f'[string]$ApiKey = "{api_key}"'
+        )
+
+    return PlainTextResponse(
+        content=content,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{entry["filename"]}"'}
+    )
 
 
 # ════════════════════════════════════════════════════════════════
