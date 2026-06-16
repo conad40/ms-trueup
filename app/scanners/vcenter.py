@@ -1,5 +1,5 @@
 """vCenter scanner — connects via pyVmomi, discovers ESXi hosts and VMs."""
-import logging, ssl, atexit, socket
+import logging, atexit
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 
@@ -14,22 +14,17 @@ def _connect(host, user, password, port=443, verify_ssl=False):
     from pyVmomi import vim
     from pyVim.connect import SmartConnect, Disconnect
 
-    # Set a default socket timeout so SmartConnect doesn't hang forever
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(CONNECT_TIMEOUT)
-
-    ctx = None
-    if not verify_ssl:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-    try:
-        log.info(f"Connecting to vCenter {host}:{port} as {user}")
-        si = SmartConnect(host=host, user=user, pwd=password, port=int(port), sslContext=ctx)
-        atexit.register(Disconnect, si)
-        return si
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+    log.info(f"Connecting to vCenter {host}:{port} as {user}")
+    si = SmartConnect(
+        host=host,
+        user=user,
+        pwd=password,
+        port=int(port),
+        disableSslCertValidation=(not verify_ssl),
+        httpConnectionTimeout=CONNECT_TIMEOUT,
+    )
+    atexit.register(Disconnect, si)
+    return si
 
 
 def _get_all_vms_and_hosts(si):
