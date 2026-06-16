@@ -32,12 +32,15 @@ services:
       DB_NAME: trueup
       DB_USER: trueup
       DB_PASS: ${DB_PASSWORD:-ChangeMeNow!}
+      ENCRYPT_KEY_FILE: /app/keys/.encrypt.key
     ports:
       - "3000:8000"
     volumes:
       - ./db/migrations:/app/migrations:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - ./.git:/app/.git
+      - encrypt_key:/app/keys
 
 volumes:
   pgdata:
+  encrypt_key:

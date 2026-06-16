@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import asyncpg
+from cryptography.fernet import Fernet
 from fastapi import FastAPI, Query, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
@@ -27,6 +28,41 @@ DB_NAME = os.environ.get("DB_NAME", "trueup")
 DB_USER = os.environ.get("DB_USER", "trueup")
 DB_PASS = os.environ.get("DB_PASS", "trueup")
 pool: asyncpg.Pool = None
+
+# ════════════════════════════════════════════════════════════════
+# Credential Encryption
+# ════════════════════════════════════════════════════════════════
+_ENCRYPT_KEY_FILE = os.environ.get("ENCRYPT_KEY_FILE", "/app/.encrypt.key")
+
+def _get_fernet():
+    """Get or create the Fernet encryption key."""
+    if os.path.exists(_ENCRYPT_KEY_FILE):
+        key = open(_ENCRYPT_KEY_FILE, "rb").read().strip()
+    else:
+        key = Fernet.generate_key()
+        os.makedirs(os.path.dirname(_ENCRYPT_KEY_FILE), exist_ok=True)
+        with open(_ENCRYPT_KEY_FILE, "wb") as f:
+            f.write(key)
+        log.info("Generated new encryption key")
+    return Fernet(key)
+
+def encrypt_value(plaintext: str) -> str:
+    """Encrypt a string, return base64-encoded ciphertext prefixed with 'enc:'."""
+    if not plaintext:
+        return ""
+    return "enc:" + _get_fernet().encrypt(plaintext.encode()).decode()
+
+def decrypt_value(stored: str) -> str:
+    """Decrypt a value. Returns as-is if not encrypted (backwards compat)."""
+    if not stored:
+        return ""
+    if stored.startswith("enc:"):
+        try:
+            return _get_fernet().decrypt(stored[4:].encode()).decode()
+        except Exception:
+            log.warning("Failed to decrypt value — returning empty")
+            return ""
+    return stored  # plain text (legacy)
 
 # ════════════════════════════════════════════════════════════════
 # Source priority: agent(50) > winrm(40) > scvmm(30) > vcenter(20) > sccm(10)
@@ -730,6 +766,8 @@ async def get_settings(category: Optional[str] = None):
             result.append(d)
         return {"settings": result}
 
+SENSITIVE_SETTINGS = {"winrm_password", "vcenter_password", "sccm_password", "agent_api_key", "snmp_community"}
+
 @app.put("/api/settings")
 async def update_settings(data: dict):
     settings = data.get("settings", {})
@@ -737,15 +775,18 @@ async def update_settings(data: dict):
     async with pool.acquire() as conn:
         for key, value in settings.items():
             if value == "••••••••": continue
-            await conn.execute("UPDATE settings SET value=$2, updated_at=NOW() WHERE key=$1", key, str(value))
+            store_value = encrypt_value(str(value)) if key in SENSITIVE_SETTINGS else str(value)
+            await conn.execute("UPDATE settings SET value=$2, updated_at=NOW() WHERE key=$1", key, store_value)
     return {"status": "updated"}
 
 @app.get("/api/settings/raw/{key}")
 async def get_setting_raw(key: str):
+    """Return decrypted setting value (for internal use by scanners)."""
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT value FROM settings WHERE key=$1", key)
+        row = await conn.fetchrow("SELECT value, sensitive FROM settings WHERE key=$1", key)
         if not row: raise HTTPException(404, f"Setting '{key}' not found")
-        return {"key": key, "value": row["value"]}
+        value = decrypt_value(row["value"]) if row["sensitive"] else row["value"]
+        return {"key": key, "value": value}
 
 
 # ─── Targets CRUD ───
@@ -804,14 +845,16 @@ async def list_creds():
 
 @app.post("/api/credentials")
 async def create_cred(data: dict):
+    enc_password = encrypt_value(data.get("password", ""))
+    enc_community = encrypt_value(data.get("community", ""))
     async with pool.acquire() as conn:
         cid = await conn.fetchval("""
             INSERT INTO credentials (name, cred_type, username, password, domain, transport, port, use_https, verify_ssl, community, snmp_version, notes)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id
-        """, data["name"], data["cred_type"], data.get("username"), data.get("password"),
+        """, data["name"], data["cred_type"], data.get("username"), enc_password,
             data.get("domain"), data.get("transport", "ntlm"), data.get("port"),
             data.get("use_https", False), data.get("verify_ssl", False),
-            data.get("community"), data.get("snmp_version"), data.get("notes"))
+            enc_community, data.get("snmp_version"), data.get("notes"))
     return {"status": "created", "id": cid}
 
 @app.put("/api/credentials/{cid}")
@@ -823,15 +866,20 @@ async def update_cred(cid: int, data: dict):
                     use_https=$7, verify_ssl=$8, community=$9, snmp_version=$10, notes=$11, enabled=$12 WHERE id=$1
             """, cid, data["name"], data.get("username"), data.get("domain"),
                 data.get("transport"), data.get("port"), data.get("use_https", False),
-                data.get("verify_ssl", False), data.get("community"), data.get("snmp_version"),
+                data.get("verify_ssl", False),
+                encrypt_value(data.get("community", "")) if data.get("community") else None,
+                data.get("snmp_version"),
                 data.get("notes"), data.get("enabled", True))
         else:
             await conn.execute("""
                 UPDATE credentials SET name=$2, username=$3, password=$4, domain=$5, transport=$6, port=$7,
                     use_https=$8, verify_ssl=$9, community=$10, snmp_version=$11, notes=$12, enabled=$13 WHERE id=$1
-            """, cid, data["name"], data.get("username"), data.get("password"), data.get("domain"),
+            """, cid, data["name"], data.get("username"), encrypt_value(data.get("password", "")),
+                data.get("domain"),
                 data.get("transport"), data.get("port"), data.get("use_https", False),
-                data.get("verify_ssl", False), data.get("community"), data.get("snmp_version"),
+                data.get("verify_ssl", False),
+                encrypt_value(data.get("community", "")) if data.get("community") else None,
+                data.get("snmp_version"),
                 data.get("notes"), data.get("enabled", True))
     return {"status": "updated"}
 
@@ -843,10 +891,14 @@ async def delete_cred(cid: int):
 
 @app.get("/api/credentials/{cid}/raw")
 async def get_cred_raw(cid: int):
+    """Return credential with password decrypted (for edit form & scanners)."""
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM credentials WHERE id=$1", cid)
         if not row: raise HTTPException(404, "Not found")
-        return dict(row)
+        d = dict(row)
+        d["password"] = decrypt_value(d.get("password", ""))
+        d["community"] = decrypt_value(d.get("community", ""))
+        return d
 
 
 # ─── vCenter Instances ───
@@ -1036,8 +1088,9 @@ if static_dir.is_dir():
 # Background Collector — runs scanners on a schedule
 # ════════════════════════════════════════════════════════════════
 async def _get_setting(conn, key, default=""):
-    row = await conn.fetchrow("SELECT value FROM settings WHERE key=$1", key)
-    return row["value"] if row else default
+    row = await conn.fetchrow("SELECT value, sensitive FROM settings WHERE key=$1", key)
+    if not row: return default
+    return decrypt_value(row["value"]) if row["sensitive"] else row["value"]
 
 
 async def _mark_stale_hosts(conn, stale_days=30):
