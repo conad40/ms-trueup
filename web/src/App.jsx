@@ -315,8 +315,8 @@ function Entitlements() {
         ))}</tbody>
       </table>
       {form && (
-        <div className="modal-overlay" onClick={() => setForm(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay" onMouseDown={e => { if (e.target === e.currentTarget) setForm(null); }}>
+          <div className="modal">
             <h3>{form.id ? 'Edit' : 'Add'} Entitlement</h3>
             <div className="form-grid">
               <label>Product<input value={form.product_name} onChange={e => setForm({...form, product_name: e.target.value})} /></label>
@@ -426,8 +426,8 @@ function CredentialsTab() {
         ))}</tbody>
       </table>
       {form && (
-        <div className="modal-overlay" onClick={() => setForm(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay" onMouseDown={e => { if (e.target === e.currentTarget) setForm(null); }}>
+          <div className="modal">
             <h3>{form.id ? 'Edit' : 'Add'} Credential</h3>
             <div className="form-grid">
               <label>Name<input value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></label>
@@ -473,8 +473,8 @@ function VCenterTab() {
         ))}</tbody>
       </table>
       {form && (
-        <div className="modal-overlay" onClick={() => setForm(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay" onMouseDown={e => { if (e.target === e.currentTarget) setForm(null); }}>
+          <div className="modal">
             <h3>{form.id ? 'Edit' : 'Add'} vCenter</h3>
             <div className="form-grid">
               <label>Name<input value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></label>
