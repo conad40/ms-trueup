@@ -575,14 +575,16 @@ function Entitlements() {
   const daysUntil = (d) => d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null;
 
   const saveAgreement = async () => {
-    const method = agrForm.id ? 'PUT' : 'POST';
-    const url = agrForm.id ? `${API}/agreements/${agrForm.id}` : `${API}/agreements`;
-    const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(agrForm) });
-    const result = await res.json();
-    // Auto-expand new agreements
-    if (!agrForm.id && result.id) setExpanded(prev => ({...prev, [result.id]: true}));
-    if (agrForm.id) setExpanded(prev => ({...prev, [agrForm.id]: true}));
-    setAgrForm(null); agrReload(); reload();
+    try {
+      const method = agrForm.id ? 'PUT' : 'POST';
+      const url = agrForm.id ? `${API}/agreements/${agrForm.id}` : `${API}/agreements`;
+      const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(agrForm) });
+      if (!res.ok) { const err = await res.text(); alert('Save failed: ' + err); return; }
+      const result = await res.json();
+      if (!agrForm.id && result.id) setExpanded(prev => ({...prev, [result.id]: true}));
+      if (agrForm.id) setExpanded(prev => ({...prev, [agrForm.id]: true}));
+      setAgrForm(null); agrReload(); reload();
+    } catch (e) { alert('Save failed: ' + e.message); }
   };
 
   const deleteAgreement = async (id) => {
