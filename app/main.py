@@ -1257,6 +1257,7 @@ class _BufferedLogHandler(logging.Handler):
 
 # Install the handler on startup
 _buf_handler = _BufferedLogHandler()
+_buf_handler.setLevel(logging.DEBUG)
 _buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 logging.getLogger("trueup").addHandler(_buf_handler)
 
