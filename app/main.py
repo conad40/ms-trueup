@@ -1001,6 +1001,39 @@ async def delete_vcenter(vid: int):
     return {"status": "deleted"}
 
 
+# ─── SCCM Instances ───
+@app.get("/api/sccm-instances")
+async def list_sccm():
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT s.*, c.name as credential_name, c.username
+            FROM sccm_instances s LEFT JOIN credentials c ON c.id=s.credential_id ORDER BY s.name
+        """)
+        return {"instances": [dict(r) for r in rows]}
+
+@app.post("/api/sccm-instances")
+async def create_sccm(data: dict):
+    async with pool.acquire() as conn:
+        sid = await conn.fetchval(
+            "INSERT INTO sccm_instances (name, server_url, credential_id, verify_ssl, enabled, notes) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
+            data["name"], data["server_url"], data.get("credential_id"), data.get("verify_ssl", False), data.get("enabled", True), data.get("notes"))
+    return {"status": "created", "id": sid}
+
+@app.put("/api/sccm-instances/{sid}")
+async def update_sccm(sid: int, data: dict):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE sccm_instances SET name=$2, server_url=$3, credential_id=$4, verify_ssl=$5, enabled=$6, notes=$7 WHERE id=$1",
+            sid, data["name"], data["server_url"], data.get("credential_id"), data.get("verify_ssl", False), data.get("enabled", True), data.get("notes"))
+    return {"status": "updated"}
+
+@app.delete("/api/sccm-instances/{sid}")
+async def delete_sccm_instance(sid: int):
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM sccm_instances WHERE id=$1", sid)
+    return {"status": "deleted"}
+
+
 # ─── Excel Export ───
 @app.get("/api/export/trueup")
 async def export_excel():
@@ -1369,13 +1402,25 @@ async def _execute_scanners(scan_id: int):
                     total_scanned += s; total_failed += f; all_errors.extend(e)
 
             # ── SCCM ──
-            sccm_enabled = await _get_setting(conn, "sccm_enabled", "false")
-            if sccm_enabled.lower() == "true":
-                settings = {}
-                for k in ("sccm_server_url", "sccm_username", "sccm_password", "sccm_verify_ssl"):
-                    settings[k] = await _get_setting(conn, k)
+            instances = await conn.fetch("SELECT * FROM sccm_instances WHERE enabled=TRUE")
+            if instances:
+                inst_list = []
+                for inst in instances:
+                    d = dict(inst)
+                    if d.get("credential_id"):
+                        cred_row = await conn.fetchrow("SELECT * FROM credentials WHERE id=$1", d["credential_id"])
+                        if cred_row:
+                            cr = dict(cred_row)
+                            cr["password"] = decrypt_value(cr.get("password", ""))
+                            d["_credential"] = cr
+                        else:
+                            d["_credential"] = {}
+                    else:
+                        d["_credential"] = {}
+                    log.info(f"SCCM {d.get('hostname', d.get('server_url', '?'))}: user={d['_credential'].get('username')}, domain={d['_credential'].get('domain')}, has_password={bool(d['_credential'].get('password'))}")
+                    inst_list.append(d)
                 from scanners import sccm as sccm_scanner
-                s, f, e = await sccm_scanner.scan(pool, settings)
+                s, f, e = await sccm_scanner.scan(pool, inst_list)
                 total_scanned += s; total_failed += f; all_errors.extend(e)
 
             # ── vCenter ──

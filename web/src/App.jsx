@@ -94,7 +94,10 @@ function Hosts() {
   const [page, setPage] = useState(1);
   const [showInactive, setShowInactive] = useState(false);
   const [selected, setSelected] = useState(new Set());
-  const { data, loading, reload } = useFetch(`/hosts?page=${page}&per_page=50`);
+  const [search, setSearch] = useState('');
+  const [filterSource, setFilterSource] = useState('');
+  const [filterType, setFilterType] = useState('');
+  const { data, loading, reload } = useFetch(`/hosts?page=1&per_page=10000`);
   const inactiveRes = useFetch('/hosts/inactive');
 
   const setLicense = async (hostId, field, value) => {
@@ -122,11 +125,24 @@ function Hosts() {
 
   if (loading || !data) return <Spinner />;
   const hosts = data.hosts || [];
+  const filtered = hosts.filter(h => {
+    if (search) {
+      const s = search.toLowerCase();
+      if (!(h.hostname||'').toLowerCase().includes(s) && !(h.ip_address||'').toLowerCase().includes(s) && !(h.os_name||'').toLowerCase().includes(s)) return false;
+    }
+    if (filterSource && h.scan_source !== filterSource) return false;
+    if (filterType === 'physical' && h.is_virtual) return false;
+    if (filterType === 'virtual' && !h.is_virtual) return false;
+    return true;
+  });
+  const pageSize = 50;
+  const totalPages = Math.ceil(filtered.length / pageSize);
+  const pagedHosts = filtered.slice((page - 1) * pageSize, page * pageSize);
 
   return (
     <div>
       <div className="page-header">
-        <h1>Hosts ({data.total})</h1>
+        <h1>Hosts ({filtered.length}{filtered.length !== data.total ? ` / ${data.total}` : ''})</h1>
         <div className="header-actions">
           <button onClick={exportExcel} className="btn btn-secondary">Export Excel</button>
           <button onClick={() => setShowInactive(!showInactive)} className="btn btn-secondary">
@@ -160,16 +176,32 @@ function Hosts() {
         <InactiveHosts data={inactiveRes.data} reload={() => { inactiveRes.reload(); reload(); }} />
       ) : (
         <>
+          <div className="filter-bar" style={{display:'flex',gap:'0.5rem',marginBottom:'1rem',alignItems:'center'}}>
+            <input type="text" placeholder="Search hostname, IP, OS..." value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} style={{flex:1,padding:'0.5rem',borderRadius:'4px',border:'1px solid #ddd'}} />
+            <select value={filterSource} onChange={e => { setFilterSource(e.target.value); setPage(1); }}>
+              <option value="">All Sources</option>
+              <option value="vcenter">vCenter</option>
+              <option value="agent">Agent</option>
+              <option value="winrm">WinRM</option>
+              <option value="sccm">SCCM</option>
+              <option value="scvmm">SCVMM</option>
+            </select>
+            <select value={filterType} onChange={e => { setFilterType(e.target.value); setPage(1); }}>
+              <option value="">All Types</option>
+              <option value="physical">Physical</option>
+              <option value="virtual">VM</option>
+            </select>
+          </div>
           <table className="data-table">
             <thead>
               <tr>
-                <th><input type="checkbox" onChange={e => setSelected(e.target.checked ? new Set(hosts.map(h=>h.id)) : new Set())} /></th>
+                <th><input type="checkbox" onChange={e => setSelected(e.target.checked ? new Set(filtered.map(h=>h.id)) : new Set())} /></th>
                 <th>Hostname</th><th>IP</th><th>OS</th><th>Type</th><th>Sockets</th><th>Cores</th>
                 <th>Source</th><th>WS License</th><th>SQL License</th><th>Last Scan</th>
               </tr>
             </thead>
             <tbody>
-              {hosts.map(h => (
+              {pagedHosts.map(h => (
                 <tr key={h.id} className={h.license_override ? 'row-override' : ''}>
                   <td><input type="checkbox" checked={selected.has(h.id)} onChange={e => { const s = new Set(selected); e.target.checked ? s.add(h.id) : s.delete(h.id); setSelected(s); }} /></td>
                   <td><strong>{h.hostname}</strong></td>
@@ -204,8 +236,8 @@ function Hosts() {
           </table>
           <div className="pagination">
             <button disabled={page <= 1} onClick={() => setPage(p => p-1)}>← Prev</button>
-            <span>Page {page} of {Math.ceil(data.total / 50)}</span>
-            <button disabled={page >= Math.ceil(data.total / 50)} onClick={() => setPage(p => p+1)}>Next →</button>
+            <span>Page {page} of {totalPages}</span>
+            <button disabled={page >= totalPages} onClick={() => setPage(p => p+1)}>Next →</button>
           </div>
         </>
       )}
@@ -349,7 +381,7 @@ function Scanners() {
     <div>
       <h1>Scanners</h1>
       <div className="tab-bar">
-        {['targets','credentials','vcenter','history'].map(t => (
+        {['targets','credentials','vcenter','sccm','history'].map(t => (
           <button key={t} className={`tab ${tab===t?'active':''}`} onClick={() => setTab(t)}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>
         ))}
         <button className="btn btn-primary" style={{marginLeft:'auto'}} onClick={async () => { await fetch(`${API}/scans/trigger`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}); alert('Scan triggered'); }}>
@@ -359,6 +391,7 @@ function Scanners() {
       {tab === 'targets' && <TargetsTab />}
       {tab === 'credentials' && <CredentialsTab />}
       {tab === 'vcenter' && <VCenterTab />}
+      {tab === 'sccm' && <SCCMTab />}
       {tab === 'history' && <ScanHistory />}
     </div>
   );
@@ -431,7 +464,7 @@ function CredentialsTab() {
             <h3>{form.id ? 'Edit' : 'Add'} Credential</h3>
             <div className="form-grid">
               <label>Name<input value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></label>
-              <label>Type<select value={form.cred_type} onChange={e => setForm({...form, cred_type: e.target.value})}><option value="winrm">WinRM</option><option value="vcenter">vCenter</option><option value="snmp">SNMP</option></select></label>
+              <label>Type<select value={form.cred_type} onChange={e => setForm({...form, cred_type: e.target.value})}><option value="winrm">WinRM</option><option value="vcenter">vCenter</option><option value="sccm">SCCM</option><option value="snmp">SNMP</option></select></label>
               <label>Username<input value={form.username||''} onChange={e => setForm({...form, username: e.target.value})} /></label>
               <label>Password<input type="password" value={form.password||''} onChange={e => setForm({...form, password: e.target.value})} /></label>
               <label>Domain<input value={form.domain||''} onChange={e => setForm({...form, domain: e.target.value})}
@@ -484,6 +517,56 @@ function VCenterTab() {
                 {vcCreds.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select></label>
               <label className="checkbox-label"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form, enabled: e.target.checked})} /> Enabled</label>
+            </div>
+            <div className="modal-actions"><button className="btn btn-primary" onClick={save}>Save</button><button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SCCMTab() {
+  const { data, loading, reload } = useFetch('/sccm-instances');
+  const creds = useFetch('/credentials');
+  const [form, setForm] = useState(null);
+
+  const save = async () => {
+    const method = form.id ? 'PUT' : 'POST';
+    const url = form.id ? `${API}/sccm-instances/${form.id}` : `${API}/sccm-instances`;
+    await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+    setForm(null); reload();
+  };
+
+  const del = async (id) => { await fetch(`${API}/sccm-instances/${id}`, { method: 'DELETE' }); reload(); };
+
+  if (loading || !data) return <Spinner />;
+  const sccmCreds = (creds.data?.credentials || []).filter(c => c.cred_type === 'sccm');
+  return (
+    <div>
+      <button className="btn btn-primary" onClick={() => setForm({ name: '', server_url: '', credential_id: null, verify_ssl: true, enabled: true, notes: '' })}>+ Add SCCM</button>
+      <table className="data-table">
+        <thead><tr><th>Name</th><th>Server URL</th><th>Credential</th><th>Enabled</th><th>Last Scan</th><th>Hosts Found</th><th>Actions</th></tr></thead>
+        <tbody>{(data.instances||[]).map(v => (
+          <tr key={v.id}><td>{v.name}</td><td>{v.server_url}</td><td>{v.credential_name||'—'}</td><td>{v.enabled?'✓':'✗'}</td>
+          <td>{v.last_scan ? new Date(v.last_scan).toLocaleDateString() : '—'}</td><td>{v.hosts_found}</td>
+          <td><button className="btn-sm" onClick={() => setForm({...v})}>Edit</button> <button className="btn-sm btn-danger" onClick={() => del(v.id)}>Delete</button></td></tr>
+        ))}</tbody>
+      </table>
+      {form && (
+        <div className="modal-overlay" onMouseDown={e => { if (e.target === e.currentTarget) setForm(null); }}>
+          <div className="modal">
+            <h3>{form.id ? 'Edit' : 'Add'} SCCM Instance</h3>
+            <div className="form-grid">
+              <label>Name<input value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></label>
+              <label>Server URL<input value={form.server_url} onChange={e => setForm({...form, server_url: e.target.value})} /></label>
+              <label>Credential<select value={form.credential_id||''} onChange={e => setForm({...form, credential_id: parseInt(e.target.value)||null})}>
+                <option value="">Use global settings</option>
+                {sccmCreds.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select></label>
+              <label className="checkbox-label"><input type="checkbox" checked={form.verify_ssl} onChange={e => setForm({...form, verify_ssl: e.target.checked})} /> Verify SSL</label>
+              <label className="checkbox-label"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form, enabled: e.target.checked})} /> Enabled</label>
+              <label>Notes<input value={form.notes||''} onChange={e => setForm({...form, notes: e.target.value})} /></label>
             </div>
             <div className="modal-actions"><button className="btn btn-primary" onClick={save}>Save</button><button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button></div>
           </div>
