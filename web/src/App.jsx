@@ -97,6 +97,7 @@ function Hosts() {
   const [search, setSearch] = useState('');
   const [filterSource, setFilterSource] = useState('');
   const [filterType, setFilterType] = useState('');
+  const [filterOS, setFilterOS] = useState('');
   const { data, loading, reload } = useFetch(`/hosts?page=1&per_page=10000`);
   const inactiveRes = useFetch('/hosts/inactive');
 
@@ -133,8 +134,43 @@ function Hosts() {
     if (filterSource && h.scan_source !== filterSource) return false;
     if (filterType === 'physical' && h.is_virtual) return false;
     if (filterType === 'virtual' && !h.is_virtual) return false;
+    if (filterOS) {
+      const os = (h.os_name||'').toLowerCase();
+      const f = filterOS;
+      if (f === 'VMware ESXi' && !os.includes('esxi')) return false;
+      else if (f === 'Windows Server 2022' && !os.includes('windows server 2022')) return false;
+      else if (f === 'Windows Server 2019' && !os.includes('windows server 2019')) return false;
+      else if (f === 'Windows Server 2016' && !os.includes('windows server 2016')) return false;
+      else if (f === 'Windows Server 2012' && !os.includes('windows server 2012')) return false;
+      else if (f === 'Windows Server (Other)' && (!os.includes('windows server') || os.includes('2022') || os.includes('2019') || os.includes('2016') || os.includes('2012'))) return false;
+      else if (f === 'Windows Desktop' && !(/windows 1|windows 11/.test(os))) return false;
+      else if (f === 'Red Hat Linux' && !os.includes('red hat') && !os.includes('rhel')) return false;
+      else if (f === 'Ubuntu Linux' && !os.includes('ubuntu')) return false;
+      else if (f === 'SUSE Linux' && !os.includes('suse')) return false;
+      else if (f === 'CentOS' && !os.includes('centos')) return false;
+      else if (f === 'Linux (Other)' && (!os.includes('linux') || os.includes('red hat') || os.includes('rhel') || os.includes('ubuntu') || os.includes('suse') || os.includes('centos'))) return false;
+      else if (f === 'Unknown' && os) return false;
+    }
     return true;
   });
+  // Build unique OS categories from data
+  const osCategories = [...new Set(hosts.map(h => {
+    const os = (h.os_name||'').toLowerCase();
+    if (os.includes('esxi')) return 'VMware ESXi';
+    if (os.includes('windows server 2022')) return 'Windows Server 2022';
+    if (os.includes('windows server 2019')) return 'Windows Server 2019';
+    if (os.includes('windows server 2016')) return 'Windows Server 2016';
+    if (os.includes('windows server 2012')) return 'Windows Server 2012';
+    if (os.includes('windows server')) return 'Windows Server (Other)';
+    if (os.includes('windows 1') || os.includes('windows 11')) return 'Windows Desktop';
+    if (os.includes('red hat') || os.includes('rhel')) return 'Red Hat Linux';
+    if (os.includes('ubuntu')) return 'Ubuntu Linux';
+    if (os.includes('suse')) return 'SUSE Linux';
+    if (os.includes('centos')) return 'CentOS';
+    if (os.includes('linux')) return 'Linux (Other)';
+    if (!os) return 'Unknown';
+    return 'Other';
+  }))].sort();
   const pageSize = 50;
   const totalPages = Math.ceil(filtered.length / pageSize);
   const pagedHosts = filtered.slice((page - 1) * pageSize, page * pageSize);
@@ -190,6 +226,10 @@ function Hosts() {
               <option value="">All Types</option>
               <option value="physical">Physical</option>
               <option value="virtual">VM</option>
+            </select>
+            <select value={filterOS} onChange={e => { setFilterOS(e.target.value); setPage(1); }}>
+              <option value="">All OS</option>
+              {osCategories.map(os => <option key={os} value={os}>{os}</option>)}
             </select>
           </div>
           <table className="data-table">
