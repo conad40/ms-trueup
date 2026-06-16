@@ -66,6 +66,10 @@ async def scan(pool, instances):
                     hostname = (device.get("Name") or "").strip()
                     if not hostname:
                         continue
+                    # Skip workstations — only collect servers
+                    os_name = device.get("OperatingSystemNameandVersion") or ""
+                    if not _is_server_os(os_name):
+                        continue
                     try:
                         resource_id = device.get("MachineId") or device.get("ResourceId")
                         host_data = {
