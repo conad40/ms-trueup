@@ -1398,6 +1398,7 @@ async def _execute_scanners(scan_id: int):
                             "port": int(await _get_setting(conn, "vcenter_port", "443")),
                             "verify_ssl": await _get_setting(conn, "vcenter_verify_ssl", "false") == "true",
                         }
+                    log.info(f"vCenter {d['hostname']}: user={d['_credential'].get('username')}, has_password={bool(d['_credential'].get('password'))}, port={d['_credential'].get('port')}")
                     inst_list.append(d)
                 from scanners import vcenter as vcenter_scanner
                 s, f, e = await vcenter_scanner.scan(pool, inst_list)

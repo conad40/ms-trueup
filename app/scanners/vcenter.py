@@ -105,8 +105,12 @@ async def scan(pool, instances):
             continue
 
         try:
+            user = cred["username"]
+            domain = cred.get("domain", "")
+            if domain and "@" not in user and "\\" not in user:
+                user = f"{user}@{domain}"
             result = await loop.run_in_executor(executor, _scan_sync,
-                vc_host, cred["username"], cred.get("password", ""),
+                vc_host, user, cred.get("password", ""),
                 int(cred.get("port") or 443), bool(cred.get("verify_ssl", False)))
 
             async with pool.acquire() as conn:
