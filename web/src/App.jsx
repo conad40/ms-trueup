@@ -102,8 +102,8 @@ function BarChart({ data, colorFn }) {
       {data.map(d => (
         <div key={d.label} style={{display:'flex',alignItems:'center',gap:'0.6rem'}}>
           <span style={{width:'140px',fontSize:'0.8rem',textAlign:'right',flexShrink:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:'var(--text-secondary)',fontWeight:500}}>{d.label}</span>
-          <div style={{flex:1,background:'var(--border-light)',borderRadius:'5px',height:'24px',overflow:'hidden'}}>
-            <div style={{width:`${(d.value/max)*100}%`,background:colorFn?colorFn(d):d.color||'var(--primary)',borderRadius:'5px',height:'100%',minWidth: d.value > 0 ? '3px' : 0,transition:'width 0.4s ease'}} />
+          <div style={{flex:1,background:'var(--border-light)',borderRadius:'2px',height:'24px',overflow:'hidden'}}>
+            <div style={{width:`${(d.value/max)*100}%`,background:colorFn?colorFn(d):d.color||'var(--primary)',borderRadius:'2px',height:'100%',minWidth: d.value > 0 ? '3px' : 0,transition:'width 0.4s ease'}} />
           </div>
           <span style={{width:'50px',fontSize:'0.82rem',fontWeight:700,color:'var(--text)',fontVariantNumeric:'tabular-nums'}}>{d.value.toLocaleString()}</span>
         </div>
@@ -180,8 +180,8 @@ function Dashboard() {
                     <strong style={{fontSize:'0.95rem'}}>{g.product}</strong>
                     <Badge color={g.compliant ? 'green' : 'red'}>{g.compliant ? 'Compliant' : 'Gap'}</Badge>
                   </div>
-                  <div style={{background:'var(--border-light)',borderRadius:'6px',height:'10px',marginBottom:'0.65rem',overflow:'hidden'}}>
-                    <div style={{width:`${pct}%`,height:'100%',background:color,borderRadius:'6px',transition:'width 0.4s ease'}} />
+                  <div style={{background:'var(--border-light)',borderRadius:'3px',height:'10px',marginBottom:'0.65rem',overflow:'hidden'}}>
+                    <div style={{width:`${pct}%`,height:'100%',background:color,borderRadius:'3px',transition:'width 0.4s ease'}} />
                   </div>
                   <div style={{display:'flex',justifyContent:'space-between',fontSize:'0.8rem',color:'var(--text-muted)'}}>
                     <span>Entitled: <strong style={{color:'var(--text-secondary)'}}>{g.entitled_cores.toLocaleString()}</strong></span>
@@ -238,7 +238,7 @@ function Dashboard() {
                   <span style={{fontSize:'0.65rem',color:'var(--text-muted)',fontVariantNumeric:'tabular-nums'}}>{s.hosts_scanned > 0 ? s.hosts_scanned.toLocaleString() : ''}</span>
                   <div title={`${date.toLocaleString()}: ${s.hosts_scanned} scanned`}
                     style={{width:'100%',maxWidth:'40px',height:`${h}%`,background: s.status==='completed'?'var(--primary)':s.status==='error'?'var(--danger)':'var(--warning)',
-                      borderRadius:'3px 3px 0 0',transition:'height 0.3s ease',cursor:'pointer',opacity:0.85}} />
+                      borderRadius:'2px 2px 0 0',transition:'height 0.3s ease',cursor:'pointer',opacity:0.85}} />
                   <span style={{fontSize:'0.6rem',color:'var(--text-muted)',whiteSpace:'nowrap'}}>{label}</span>
                 </div>
               );
@@ -857,7 +857,7 @@ function Settings() {
                   <button
                     className={`toggle-btn ${val === 'true' ? 'toggle-on' : 'toggle-off'}`}
                     style={{
-                      padding: '0.4rem 1.2rem', borderRadius: '20px', border: 'none', cursor: 'pointer', fontWeight: 600,
+                      padding: '0.4rem 1.2rem', borderRadius: '3px', border: 'none', cursor: 'pointer', fontWeight: 600,
                       background: val === 'true' ? '#22c55e' : '#e5e7eb', color: val === 'true' ? '#fff' : '#374151',
                       transition: 'all 0.2s'
                     }}
@@ -1079,7 +1079,7 @@ function LogsPage() {
         <div>
           <h3>Application Log</h3>
           {loading ? <Spinner /> : (
-            <div style={{background:'#1e1e1e',color:'#d4d4d4',padding:'1rem',borderRadius:'6px',
+            <div style={{background:'#1e1e1e',color:'#d4d4d4',padding:'1rem',borderRadius:'3px',
               fontFamily:'monospace',fontSize:'0.8rem',maxHeight:'500px',overflowY:'auto',whiteSpace:'pre-wrap'}}>
               {logs.length === 0 ? <span style={{color:'#888'}}>No log entries</span> :
                 logs.map((l, i) => (
