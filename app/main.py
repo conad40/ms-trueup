@@ -21,7 +21,11 @@ from typing import Optional
 log = logging.getLogger("trueup")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 
-DB_URL = os.environ.get("DATABASE_URL", "postgresql://trueup:trueup@localhost:5432/trueup")
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_PORT = int(os.environ.get("DB_PORT", "5432"))
+DB_NAME = os.environ.get("DB_NAME", "trueup")
+DB_USER = os.environ.get("DB_USER", "trueup")
+DB_PASS = os.environ.get("DB_PASS", "trueup")
 pool: asyncpg.Pool = None
 
 # ════════════════════════════════════════════════════════════════
@@ -41,7 +45,7 @@ async def _run_migrations():
     if not os.path.isdir(migration_dir):
         log.warning(f"No migration directory found at {migration_dir}")
         return
-    conn = await asyncpg.connect(DB_URL)
+    conn = await asyncpg.connect(host=DB_HOST, port=DB_PORT, database=DB_NAME, user=DB_USER, password=DB_PASS)
     try:
         await conn.execute("CREATE TABLE IF NOT EXISTS _migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW())")
         applied = {r["filename"] for r in await conn.fetch("SELECT filename FROM _migrations")}
@@ -62,7 +66,7 @@ async def _run_migrations():
 async def lifespan(app: FastAPI):
     global pool
     await _run_migrations()
-    pool = await asyncpg.create_pool(DB_URL, min_size=2, max_size=10)
+    pool = await asyncpg.create_pool(host=DB_HOST, port=DB_PORT, database=DB_NAME, user=DB_USER, password=DB_PASS, min_size=2, max_size=10)
     log.info("Database pool ready")
     yield
     await pool.close()

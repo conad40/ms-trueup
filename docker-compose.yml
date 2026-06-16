@@ -27,7 +27,11 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://trueup:${DB_PASSWORD:-ChangeMeNow!}@db:5432/trueup
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: trueup
+      DB_USER: trueup
+      DB_PASS: ${DB_PASSWORD:-ChangeMeNow!}
     ports:
       - "3000:8000"
     volumes:
