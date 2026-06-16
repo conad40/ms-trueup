@@ -18,7 +18,7 @@ function useFetch(url, deps = []) {
   return { data, loading, error, reload };
 }
 
-function Spinner() { return <div className="spinner">Loading...</div>; }
+function Spinner() { return <div className="spinner">Loading</div>; }
 function Badge({ color, children }) { return <span className={`badge badge-${color}`}>{children}</span>; }
 
 // ════════════════════════════════════════════════════════════════
@@ -59,14 +59,14 @@ function Nav({ current, onChange }) {
 function BarChart({ data, colorFn }) {
   const max = Math.max(...data.map(d => d.value), 1);
   return (
-    <div style={{display:'flex',flexDirection:'column',gap:'0.4rem'}}>
+    <div style={{display:'flex',flexDirection:'column',gap:'0.45rem'}}>
       {data.map(d => (
-        <div key={d.label} style={{display:'flex',alignItems:'center',gap:'0.5rem'}}>
-          <span style={{width:'140px',fontSize:'0.85rem',textAlign:'right',flexShrink:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{d.label}</span>
-          <div style={{flex:1,background:'#e5e7eb',borderRadius:'4px',height:'22px',position:'relative'}}>
-            <div style={{width:`${(d.value/max)*100}%`,background:colorFn?colorFn(d):d.color||'#6366f1',borderRadius:'4px',height:'100%',minWidth: d.value > 0 ? '2px' : 0,transition:'width 0.3s'}} />
+        <div key={d.label} style={{display:'flex',alignItems:'center',gap:'0.6rem'}}>
+          <span style={{width:'140px',fontSize:'0.8rem',textAlign:'right',flexShrink:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:'var(--text-secondary)',fontWeight:500}}>{d.label}</span>
+          <div style={{flex:1,background:'var(--border-light)',borderRadius:'5px',height:'24px',overflow:'hidden'}}>
+            <div style={{width:`${(d.value/max)*100}%`,background:colorFn?colorFn(d):d.color||'var(--primary)',borderRadius:'5px',height:'100%',minWidth: d.value > 0 ? '3px' : 0,transition:'width 0.4s ease'}} />
           </div>
-          <span style={{width:'50px',fontSize:'0.85rem',fontWeight:600}}>{d.value}</span>
+          <span style={{width:'50px',fontSize:'0.82rem',fontWeight:700,color:'var(--text)',fontVariantNumeric:'tabular-nums'}}>{d.value.toLocaleString()}</span>
         </div>
       ))}
     </div>
@@ -87,7 +87,7 @@ function Dashboard() {
   const compliance = comp.data?.compliance || [];
   const sourceData = Object.entries(data.sources || {}).map(([k,v]) => ({label:k, value:v}));
   const osData = Object.entries(data.os_breakdown || {}).map(([k,v]) => ({label:k, value:v}));
-  const sourceColors = {vcenter:'#7c3aed',agent:'#2563eb',winrm:'#059669',sccm:'#d97706',scvmm:'#dc2626'};
+  const sourceColors = {vcenter:'#6e56cf',agent:'#4f6ef7',winrm:'#30a46c',sccm:'#e5a000',scvmm:'#e5484d'};
 
   return (
     <div>
@@ -111,31 +111,31 @@ function Dashboard() {
 
       {/* Compliance Summary */}
       {compliance.length > 0 && (
-        <div style={{marginTop:'1.5rem'}}>
+        <div style={{marginTop:'1.75rem'}}>
           <h2 style={{marginBottom:'1rem'}}>Compliance Status</h2>
           <div className="card-grid">
             {compliance.map(g => {
               const pct = g.entitled_cores > 0 ? Math.min(100, Math.round((g.entitled_cores / Math.max(g.required_cores,1)) * 100)) : 0;
-              const color = g.compliant ? '#22c55e' : g.gap_cores > 0 ? '#ef4444' : '#f59e0b';
+              const color = g.compliant ? 'var(--success)' : 'var(--danger)';
               return (
-                <div key={g.product} className="stat-card" style={{borderLeftColor: color, padding:'1rem'}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.5rem'}}>
-                    <strong>{g.product}</strong>
+                <div key={g.product} className="stat-card" style={{borderLeftColor: color, padding:'1.25rem'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.65rem'}}>
+                    <strong style={{fontSize:'0.95rem'}}>{g.product}</strong>
                     <Badge color={g.compliant ? 'green' : 'red'}>{g.compliant ? 'Compliant' : 'Gap'}</Badge>
                   </div>
-                  <div style={{background:'#e5e7eb',borderRadius:'6px',height:'12px',marginBottom:'0.5rem',overflow:'hidden'}}>
-                    <div style={{width:`${pct}%`,height:'100%',background:color,borderRadius:'6px',transition:'width 0.3s'}} />
+                  <div style={{background:'var(--border-light)',borderRadius:'6px',height:'10px',marginBottom:'0.65rem',overflow:'hidden'}}>
+                    <div style={{width:`${pct}%`,height:'100%',background:color,borderRadius:'6px',transition:'width 0.4s ease'}} />
                   </div>
-                  <div style={{display:'flex',justifyContent:'space-between',fontSize:'0.85rem',color:'#6b7280'}}>
-                    <span>Entitled: {g.entitled_cores} cores</span>
-                    <span>Required: {g.required_cores} cores</span>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:'0.8rem',color:'var(--text-muted)'}}>
+                    <span>Entitled: <strong style={{color:'var(--text-secondary)'}}>{g.entitled_cores.toLocaleString()}</strong></span>
+                    <span>Required: <strong style={{color:'var(--text-secondary)'}}>{g.required_cores.toLocaleString()}</strong></span>
                   </div>
                   {g.gap_cores > 0 && (
-                    <div style={{fontSize:'0.85rem',color:'#ef4444',fontWeight:600,marginTop:'0.25rem'}}>
-                      Gap: {g.gap_cores} cores ({g.gap_2packs} two-core packs)
+                    <div style={{fontSize:'0.82rem',color:'var(--danger)',fontWeight:600,marginTop:'0.4rem'}}>
+                      Gap: {g.gap_cores.toLocaleString()} cores ({g.gap_2packs.toLocaleString()} two-core packs)
                     </div>
                   )}
-                  <div style={{fontSize:'0.8rem',color:'#9ca3af',marginTop:'0.25rem'}}>
+                  <div style={{fontSize:'0.78rem',color:'var(--text-muted)',marginTop:'0.35rem'}}>
                     {g.physical_hosts} physical · {g.virtual_hosts} VMs
                     {g.note ? ` · ${g.note}` : ''}
                   </div>
@@ -147,17 +147,17 @@ function Dashboard() {
       )}
 
       {/* Source & OS Breakdown */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1.5rem',marginTop:'1.5rem'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1rem',marginTop:'1.5rem'}}>
         {sourceData.length > 0 && (
-          <div className="stat-card" style={{padding:'1rem'}}>
-            <h3 style={{marginBottom:'0.75rem'}}>Hosts by Source</h3>
-            <BarChart data={sourceData} colorFn={d => sourceColors[d.label] || '#6366f1'} />
+          <div className="stat-card" style={{padding:'1.25rem',borderLeftColor:'var(--primary)'}}>
+            <h3 style={{marginBottom:'0.85rem'}}>Hosts by Source</h3>
+            <BarChart data={sourceData} colorFn={d => sourceColors[d.label] || 'var(--primary)'} />
           </div>
         )}
         {osData.length > 0 && (
-          <div className="stat-card" style={{padding:'1rem'}}>
-            <h3 style={{marginBottom:'0.75rem'}}>Hosts by OS</h3>
-            <BarChart data={osData} colorFn={() => '#6366f1'} />
+          <div className="stat-card" style={{padding:'1.25rem',borderLeftColor:'var(--primary)'}}>
+            <h3 style={{marginBottom:'0.85rem'}}>Hosts by OS</h3>
+            <BarChart data={osData} colorFn={() => 'var(--primary)'} />
           </div>
         )}
       </div>
@@ -311,8 +311,8 @@ function Hosts() {
         <InactiveHosts data={inactiveRes.data} reload={() => { inactiveRes.reload(); reload(); }} />
       ) : (
         <>
-          <div className="filter-bar" style={{display:'flex',gap:'0.5rem',marginBottom:'1rem',alignItems:'center'}}>
-            <input type="text" placeholder="Search hostname, IP, OS..." value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} style={{flex:1,padding:'0.5rem',borderRadius:'4px',border:'1px solid #ddd'}} />
+          <div className="filter-bar">
+            <input type="text" placeholder="Search hostname, IP, OS..." value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
             <select value={filterSource} onChange={e => { setFilterSource(e.target.value); setPage(1); }}>
               <option value="">All Sources</option>
               <option value="vcenter">vCenter</option>
