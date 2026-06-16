@@ -8,7 +8,13 @@ Single FastAPI service that:
 """
 import os, math, io, re, glob, subprocess, asyncio, logging, secrets, hashlib
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+
+def _parse_date(v):
+    """Convert a date string to a date object, or None."""
+    if not v: return None
+    if isinstance(v, date): return v
+    return date.fromisoformat(v)
 from pathlib import Path
 
 import asyncpg
@@ -814,7 +820,7 @@ async def create_agreement(data: dict):
             INSERT INTO agreements (name, agreement_number, agreement_type, start_date, expiry_date, notes)
             VALUES ($1,$2,$3,$4,$5,$6) RETURNING id
         """, data["name"], data.get("agreement_number") or None, data.get("agreement_type", "EA"),
-            data.get("start_date") or None, data.get("expiry_date") or None, data.get("notes") or None)
+            _parse_date(data.get("start_date")), _parse_date(data.get("expiry_date")), data.get("notes") or None)
     return {"status": "created", "id": aid}
 
 @app.put("/api/agreements/{aid}")
@@ -824,7 +830,7 @@ async def update_agreement(aid: int, data: dict):
             UPDATE agreements SET name=$2, agreement_number=$3, agreement_type=$4,
                 start_date=$5, expiry_date=$6, notes=$7 WHERE id=$1
         """, aid, data["name"], data.get("agreement_number") or None, data.get("agreement_type", "EA"),
-            data.get("start_date") or None, data.get("expiry_date") or None, data.get("notes") or None)
+            _parse_date(data.get("start_date")), _parse_date(data.get("expiry_date")), data.get("notes") or None)
     return {"status": "updated"}
 
 @app.delete("/api/agreements/{aid}")
