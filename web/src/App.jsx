@@ -512,17 +512,10 @@ function ScanHistory() {
 function Settings() {
   const { data, loading, reload } = useFetch('/settings');
   const [edits, setEdits] = useState({});
-  const [apiKey, setApiKey] = useState(null);
 
   const save = async () => {
     await fetch(`${API}/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: edits }) });
     setEdits({}); reload();
-  };
-
-  const genKey = async () => {
-    const res = await fetch(`${API}/settings/generate-api-key`, { method: 'POST' });
-    const d = await res.json();
-    setApiKey(d.key);
   };
 
   if (loading || !data) return <Spinner />;
@@ -548,12 +541,89 @@ function Settings() {
           ))}
         </div>
       ))}
-      <div className="settings-section">
-        <h3>Agent API Key</h3>
-        <p>Generate a new API key for push-mode agents.</p>
-        <button className="btn btn-secondary" onClick={genKey}>Generate New Key</button>
-        {apiKey && <div className="info-box"><strong>New key (copy now — won't be shown again):</strong><br /><code>{apiKey}</code></div>}
-      </div>
+      <ApiKeysSection />
+    </div>
+  );
+}
+
+function ApiKeysSection() {
+  const { data, loading, reload } = useFetch('/api-keys');
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ name: '', description: '', expires_at: '' });
+  const [newKey, setNewKey] = useState(null);
+
+  const create = async () => {
+    const res = await fetch(`${API}/api-keys`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: form.name, description: form.description, expires_at: form.expires_at || null }) });
+    const d = await res.json();
+    if (d.key) { setNewKey(d.key); setShowCreate(false); setForm({ name: '', description: '', expires_at: '' }); reload(); }
+  };
+
+  const expire = async (id) => {
+    if (!confirm('Expire this key? Scripts using it will stop working.')) return;
+    await fetch(`${API}/api-keys/${id}/expire`, { method: 'POST' }); reload();
+  };
+
+  const remove = async (id) => {
+    if (!confirm('Permanently delete this key?')) return;
+    await fetch(`${API}/api-keys/${id}`, { method: 'DELETE' }); reload();
+  };
+
+  const copyKey = () => { navigator.clipboard.writeText(newKey); };
+
+  if (loading) return null;
+  const keys = data?.api_keys || [];
+
+  return (
+    <div className="settings-section">
+      <h3>API Keys</h3>
+      <p style={{color:'var(--text-secondary,#666)',marginBottom:'0.75rem'}}>Manage keys for agent and SCVMM collection scripts.</p>
+
+      {newKey && (
+        <div className="info-box" style={{marginBottom:'1rem',background:'#e8f5e9',border:'1px solid #4caf50'}}>
+          <strong>New key created — copy now, it won't be shown again:</strong><br />
+          <code style={{wordBreak:'break-all'}}>{newKey}</code><br />
+          <button className="btn btn-secondary" onClick={copyKey} style={{marginTop:'0.5rem'}}>Copy to Clipboard</button>
+          <button className="btn btn-secondary" onClick={() => setNewKey(null)} style={{marginTop:'0.5rem',marginLeft:'0.5rem'}}>Dismiss</button>
+        </div>
+      )}
+
+      <button className="btn btn-primary" onClick={() => setShowCreate(!showCreate)} style={{marginBottom:'1rem'}}>+ Create API Key</button>
+
+      {showCreate && (
+        <div className="card" style={{padding:'1rem',marginBottom:'1rem'}}>
+          <div className="form-grid">
+            <label>Name *<input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="e.g. Production Agents" /></label>
+            <label>Description<input value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="e.g. Used by GPO-deployed agents" /></label>
+            <label>Expires (optional)<input type="date" value={form.expires_at} onChange={e => setForm({...form, expires_at: e.target.value})} /></label>
+          </div>
+          <div style={{marginTop:'0.75rem'}}>
+            <button className="btn btn-primary" onClick={create} disabled={!form.name.trim()}>Create Key</button>
+            <button className="btn btn-secondary" onClick={() => setShowCreate(false)} style={{marginLeft:'0.5rem'}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {keys.length > 0 ? (
+        <table className="data-table">
+          <thead><tr><th>Name</th><th>Description</th><th>Key Prefix</th><th>Status</th><th>Last Used</th><th>Uses</th><th>Expires</th><th>Actions</th></tr></thead>
+          <tbody>{keys.map(k => (
+            <tr key={k.id} style={k.status !== 'active' ? {opacity:0.5} : {}}>
+              <td><strong>{k.name}</strong></td>
+              <td>{k.description || '—'}</td>
+              <td><code>{k.key_prefix}...</code></td>
+              <td><span className={`badge badge-${k.status === 'active' ? 'green' : 'red'}`}>{k.status}</span></td>
+              <td>{k.last_used_at ? new Date(k.last_used_at).toLocaleDateString() : 'Never'}</td>
+              <td>{k.use_count}</td>
+              <td>{k.expires_at ? new Date(k.expires_at).toLocaleDateString() : 'Never'}</td>
+              <td>
+                {k.status === 'active' && <button className="btn-sm" onClick={() => expire(k.id)}>Expire</button>}
+                <button className="btn-sm" onClick={() => remove(k.id)} style={{marginLeft:'0.25rem',color:'#e53935'}}>Delete</button>
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>
+      ) : <p style={{color:'#999'}}>No API keys yet. Create one to use with collection scripts.</p>}
     </div>
   );
 }

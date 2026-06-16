@@ -6,7 +6,7 @@ Single FastAPI service that:
 - Runs scanner modules as background tasks
 - Supports git-based self-updates from the web UI
 """
-import os, math, io, glob, subprocess, asyncio, logging, secrets
+import os, math, io, glob, subprocess, asyncio, logging, secrets, hashlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -332,16 +332,82 @@ async def dashboard():
         }
 
 
-# ─── Agent Push Ingest ───
+# ─── API Key Management ───
+def _hash_key(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()
+
 async def _verify_api_key(key: str):
+    key_hash = _hash_key(key)
     async with pool.acquire() as conn:
-        stored = await conn.fetchval("SELECT value FROM settings WHERE key='agent_api_key'")
-    if not stored:
-        raise HTTPException(403, "Agent API key not configured")
-    if key != stored:
-        raise HTTPException(401, "Invalid API key")
+        row = await conn.fetchrow(
+            "SELECT id, status, expires_at FROM api_keys WHERE key_hash=$1", key_hash)
+        if not row:
+            # Fallback: check legacy single-key setting
+            stored = await conn.fetchval("SELECT value FROM settings WHERE key='agent_api_key'")
+            if stored and decrypt_value(stored) == key:
+                return
+            raise HTTPException(401, "Invalid API key")
+        if row["status"] != "active":
+            raise HTTPException(401, "API key is expired or revoked")
+        if row["expires_at"] and row["expires_at"] < datetime.now(timezone.utc):
+            await conn.execute("UPDATE api_keys SET status='expired' WHERE id=$1", row["id"])
+            raise HTTPException(401, "API key has expired")
+        # Track usage
+        await conn.execute(
+            "UPDATE api_keys SET last_used_at=NOW(), use_count=use_count+1 WHERE id=$1", row["id"])
 
+@app.get("/api/api-keys")
+async def list_api_keys():
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id, name, description, key_prefix, status, expires_at, last_used_at, use_count, created_at FROM api_keys ORDER BY created_at DESC")
+        return {"api_keys": [dict(r) for r in rows]}
 
+@app.post("/api/api-keys")
+async def create_api_key(data: dict):
+    name = data.get("name", "").strip()
+    if not name:
+        raise HTTPException(400, "Name is required")
+    description = data.get("description", "")
+    expires_at = data.get("expires_at")  # ISO string or null
+
+    key = secrets.token_urlsafe(32)
+    key_hash = _hash_key(key)
+    key_prefix = key[:8]
+
+    exp = None
+    if expires_at:
+        try:
+            exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(400, "Invalid expires_at format")
+
+    async with pool.acquire() as conn:
+        kid = await conn.fetchval(
+            "INSERT INTO api_keys (name, description, key_hash, key_prefix, expires_at) VALUES ($1,$2,$3,$4,$5) RETURNING id",
+            name, description, key_hash, key_prefix, exp)
+    return {"id": kid, "key": key, "prefix": key_prefix}
+
+@app.put("/api/api-keys/{kid}")
+async def update_api_key(kid: int, data: dict):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE api_keys SET name=$2, description=$3 WHERE id=$1",
+            kid, data.get("name", ""), data.get("description", ""))
+    return {"status": "updated"}
+
+@app.post("/api/api-keys/{kid}/expire")
+async def expire_api_key(kid: int):
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE api_keys SET status='expired', expires_at=NOW() WHERE id=$1", kid)
+    return {"status": "expired"}
+
+@app.delete("/api/api-keys/{kid}")
+async def delete_api_key(kid: int):
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM api_keys WHERE id=$1", kid)
+    return {"status": "deleted"}
+
+# ─── Agent Push Ingest ───
 @app.post("/api/ingest")
 async def ingest(data: dict, x_api_key: str = Header(...)):
     await _verify_api_key(x_api_key)
@@ -365,9 +431,10 @@ async def ingest(data: dict, x_api_key: str = Header(...)):
 
 @app.post("/api/settings/generate-api-key")
 async def generate_api_key():
+    """Legacy endpoint — kept for backward compatibility."""
     key = secrets.token_urlsafe(32)
     async with pool.acquire() as conn:
-        await conn.execute("UPDATE settings SET value=$1, updated_at=NOW() WHERE key='agent_api_key'", key)
+        await conn.execute("UPDATE settings SET value=$1, updated_at=NOW() WHERE key='agent_api_key'", encrypt_value(key))
     return {"key": key}
 
 
@@ -1144,15 +1211,20 @@ async def download_script(script_id: str):
 
     # Inject current server URL and API key
     async with pool.acquire() as conn:
-        api_key = await conn.fetchval("SELECT value FROM settings WHERE key='agent_api_key'")
+        # Prefer newest active key from api_keys table
+        api_key = await conn.fetchval(
+            "SELECT key_prefix FROM api_keys WHERE status='active' ORDER BY created_at DESC LIMIT 1")
+        if api_key:
+            api_key = None  # Can't recover full key from hash; user must paste it
+        # Fallback to legacy setting
+        if not api_key:
+            legacy = await conn.fetchval("SELECT value FROM settings WHERE key='agent_api_key'")
+            if legacy:
+                api_key = decrypt_value(legacy)
 
-    # Build the server URL from the request context (fallback to hostname)
     import socket
     server_host = socket.getfqdn()
     server_url = f"http://{server_host}:3000"
-
-    if api_key:
-        api_key = decrypt_value(api_key)
 
     # Replace default values in the param blocks
     content = content.replace(
