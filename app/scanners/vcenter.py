@@ -107,7 +107,7 @@ async def scan(pool, instances):
         try:
             result = await loop.run_in_executor(executor, _scan_sync,
                 vc_host, cred["username"], cred.get("password", ""),
-                cred.get("port", 443), cred.get("verify_ssl", False))
+                int(cred.get("port") or 443), bool(cred.get("verify_ssl", False)))
 
             async with pool.acquire() as conn:
                 for h in result["hosts"]:
