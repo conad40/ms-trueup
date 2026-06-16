@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+.env.txt
+*.log
+node_modules/
+web/dist/
+*.docx
+filebrowser/
+pgdata/

@@ -1,0 +1,673 @@
+import React, { useState, useEffect, useCallback } from 'react';
+
+const API = '/api';
+
+// ════════════════════════════════════════════════════════════════
+// Utility hooks & components
+// ════════════════════════════════════════════════════════════════
+function useFetch(url, deps = []) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const reload = useCallback(() => {
+    setLoading(true);
+    fetch(`${API}${url}`).then(r => r.json()).then(d => { setData(d); setError(null); })
+      .catch(e => setError(e.message)).finally(() => setLoading(false));
+  }, [url, ...deps]);
+  useEffect(reload, [reload]);
+  return { data, loading, error, reload };
+}
+
+function Spinner() { return <div className="spinner">Loading...</div>; }
+function Badge({ color, children }) { return <span className={`badge badge-${color}`}>{children}</span>; }
+
+// ════════════════════════════════════════════════════════════════
+// Navigation
+// ════════════════════════════════════════════════════════════════
+const PAGES = [
+  { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+  { id: 'hosts', label: 'Hosts', icon: '🖥️' },
+  { id: 'compliance', label: 'Compliance', icon: '✅' },
+  { id: 'entitlements', label: 'Entitlements', icon: '📜' },
+  { id: 'scanners', label: 'Scanners', icon: '🔍' },
+  { id: 'settings', label: 'Settings', icon: '⚙️' },
+  { id: 'updates', label: 'System Update', icon: '🔄' },
+];
+
+function Nav({ current, onChange }) {
+  return (
+    <nav className="sidebar">
+      <div className="sidebar-header">
+        <h2>MS True-Up</h2>
+        <small>License Management</small>
+      </div>
+      {PAGES.map(p => (
+        <button key={p.id} className={`nav-btn ${current === p.id ? 'active' : ''}`}
+          onClick={() => onChange(p.id)}>
+          <span className="nav-icon">{p.icon}</span> {p.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Dashboard
+// ════════════════════════════════════════════════════════════════
+function Dashboard() {
+  const { data, loading } = useFetch('/dashboard');
+  if (loading || !data) return <Spinner />;
+  const cards = [
+    { label: 'Physical Hosts', value: data.physical_hosts, color: '#2563eb' },
+    { label: 'Virtual Hosts', value: data.virtual_hosts, color: '#7c3aed' },
+    { label: 'Total Hosts', value: data.total_hosts, color: '#059669' },
+    { label: 'SQL Instances', value: data.sql_instances, color: '#d97706' },
+  ];
+  return (
+    <div>
+      <h1>Dashboard</h1>
+      <div className="card-grid">
+        {cards.map(c => (
+          <div key={c.label} className="stat-card" style={{ borderLeftColor: c.color }}>
+            <div className="stat-value">{c.value}</div>
+            <div className="stat-label">{c.label}</div>
+          </div>
+        ))}
+      </div>
+      {data.last_scan && (
+        <div className="info-box">
+          Last scan: {new Date(data.last_scan.started_at).toLocaleString()} —
+          {data.last_scan.hosts_scanned} scanned, {data.last_scan.hosts_failed} failed
+          <Badge color={data.last_scan.status === 'completed' ? 'green' : 'yellow'}>{data.last_scan.status}</Badge>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Hosts
+// ════════════════════════════════════════════════════════════════
+function Hosts() {
+  const [page, setPage] = useState(1);
+  const [showInactive, setShowInactive] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const { data, loading, reload } = useFetch(`/hosts?page=${page}&per_page=50`);
+  const inactiveRes = useFetch('/hosts/inactive');
+
+  const setLicense = async (hostId, field, value) => {
+    const endpoint = field === 'sql_license_override' ? 'sql-license' : 'license';
+    await fetch(`${API}/hosts/${hostId}/${endpoint}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [field]: value || null })
+    });
+    reload();
+  };
+
+  const bulkAction = async (action, body) => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    await fetch(`${API}/hosts/${action}`, {
+      method: action.includes('delete') ? 'DELETE' : 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host_ids: ids, ...body })
+    });
+    setSelected(new Set());
+    reload();
+  };
+
+  const exportExcel = () => { window.open(`${API}/export/trueup`); };
+
+  if (loading || !data) return <Spinner />;
+  const hosts = data.hosts || [];
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Hosts ({data.total})</h1>
+        <div className="header-actions">
+          <button onClick={exportExcel} className="btn btn-secondary">Export Excel</button>
+          <button onClick={() => setShowInactive(!showInactive)} className="btn btn-secondary">
+            {showInactive ? 'Show Active' : 'Show Inactive'}
+          </button>
+          {selected.size > 0 && (
+            <>
+              <select onChange={e => { if (e.target.value) bulkAction('bulk-license', { license_override: e.target.value === 'clear' ? null : e.target.value }); e.target.value = ''; }}>
+                <option value="">Bulk WS License...</option>
+                <option value="Datacenter">Datacenter</option>
+                <option value="Standard">Standard</option>
+                <option value="None">None</option>
+                <option value="Vendor">Vendor</option>
+                <option value="clear">Clear Override</option>
+              </select>
+              <select onChange={e => { if (e.target.value) bulkAction('bulk-sql-license', { sql_license_override: e.target.value === 'clear' ? null : e.target.value }); e.target.value = ''; }}>
+                <option value="">Bulk SQL License...</option>
+                <option value="Enterprise">Enterprise</option>
+                <option value="Standard">Standard</option>
+                <option value="None">None</option>
+                <option value="Vendor">Vendor</option>
+                <option value="clear">Clear Override</option>
+              </select>
+              <button onClick={() => { if (confirm('Delete selected?')) bulkAction('bulk-delete', {}); }} className="btn btn-danger">Delete Selected</button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {showInactive ? (
+        <InactiveHosts data={inactiveRes.data} reload={() => { inactiveRes.reload(); reload(); }} />
+      ) : (
+        <>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th><input type="checkbox" onChange={e => setSelected(e.target.checked ? new Set(hosts.map(h=>h.id)) : new Set())} /></th>
+                <th>Hostname</th><th>IP</th><th>OS</th><th>Type</th><th>Sockets</th><th>Cores</th>
+                <th>Source</th><th>WS License</th><th>SQL License</th><th>Last Scan</th>
+              </tr>
+            </thead>
+            <tbody>
+              {hosts.map(h => (
+                <tr key={h.id} className={h.license_override ? 'row-override' : ''}>
+                  <td><input type="checkbox" checked={selected.has(h.id)} onChange={e => { const s = new Set(selected); e.target.checked ? s.add(h.id) : s.delete(h.id); setSelected(s); }} /></td>
+                  <td><strong>{h.hostname}</strong></td>
+                  <td>{h.ip_address}</td>
+                  <td title={h.os_name}>{(h.os_name||'').substring(0,30)}</td>
+                  <td><Badge color={h.is_virtual ? 'blue' : 'gray'}>{h.is_virtual ? 'VM' : 'Physical'}</Badge></td>
+                  <td>{h.cpu_sockets}</td>
+                  <td>{h.cpu_cores}</td>
+                  <td><Badge color="purple">{h.scan_source}</Badge></td>
+                  <td>
+                    <select value={h.license_override || ''} onChange={e => setLicense(h.id, 'license_override', e.target.value)}>
+                      <option value="">Auto ({h.license_assignment})</option>
+                      <option value="Datacenter">Datacenter</option>
+                      <option value="Standard">Standard</option>
+                      <option value="None">None</option>
+                      <option value="Vendor">Vendor</option>
+                    </select>
+                  </td>
+                  <td>
+                    <select value={h.sql_license_override || ''} onChange={e => setLicense(h.id, 'sql_license_override', e.target.value)}>
+                      <option value="">Auto ({h.sql_license_assignment || '—'})</option>
+                      <option value="Enterprise">Enterprise</option>
+                      <option value="Standard">Standard</option>
+                      <option value="None">None</option>
+                      <option value="Vendor">Vendor</option>
+                    </select>
+                  </td>
+                  <td>{h.last_scan ? new Date(h.last_scan).toLocaleDateString() : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="pagination">
+            <button disabled={page <= 1} onClick={() => setPage(p => p-1)}>← Prev</button>
+            <span>Page {page} of {Math.ceil(data.total / 50)}</span>
+            <button disabled={page >= Math.ceil(data.total / 50)} onClick={() => setPage(p => p+1)}>Next →</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function InactiveHosts({ data, reload }) {
+  const [selected, setSelected] = useState(new Set());
+  if (!data) return <Spinner />;
+  const hosts = data.hosts || [];
+  const reactivate = async () => {
+    await fetch(`${API}/hosts/reactivate`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ host_ids: [...selected] }) });
+    setSelected(new Set());
+    reload();
+  };
+  return (
+    <div>
+      <h3>Inactive Hosts ({hosts.length})</h3>
+      {selected.size > 0 && <button onClick={reactivate} className="btn btn-primary">Reactivate Selected</button>}
+      <table className="data-table">
+        <thead><tr><th><input type="checkbox" onChange={e => setSelected(e.target.checked ? new Set(hosts.map(h=>h.id)) : new Set())} /></th><th>Hostname</th><th>IP</th><th>OS</th><th>Source</th><th>Last Scan</th></tr></thead>
+        <tbody>{hosts.map(h => (
+          <tr key={h.id}><td><input type="checkbox" checked={selected.has(h.id)} onChange={e => { const s = new Set(selected); e.target.checked ? s.add(h.id) : s.delete(h.id); setSelected(s); }} /></td>
+          <td>{h.hostname}</td><td>{h.ip_address}</td><td>{h.os_name}</td><td>{h.scan_source}</td><td>{h.last_scan ? new Date(h.last_scan).toLocaleDateString() : '—'}</td></tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Compliance
+// ════════════════════════════════════════════════════════════════
+function Compliance() {
+  const { data, loading } = useFetch('/compliance');
+  if (loading || !data) return <Spinner />;
+  const items = data.compliance || [];
+  return (
+    <div>
+      <h1>Compliance Report</h1>
+      {items.map((item, i) => (
+        <div key={i} className={`compliance-card ${item.compliant ? 'compliant' : 'non-compliant'}`}>
+          <div className="compliance-header">
+            <h3>{item.product}</h3>
+            <Badge color={item.compliant ? 'green' : 'red'}>{item.compliant ? 'Compliant' : 'Gap'}</Badge>
+          </div>
+          <div className="compliance-grid">
+            <div><label>Required</label><span>{item.required_cores} cores ({item.required_2packs} 2-packs)</span></div>
+            <div><label>Entitled</label><span>{item.entitled_cores} cores ({item.entitled_2packs} 2-packs)</span></div>
+            {!item.compliant && <div className="gap"><label>Gap</label><span className="text-red">{item.gap_cores} cores ({item.gap_2packs} 2-packs)</span></div>}
+            <div><label>Physical</label><span>{item.physical_hosts}</span></div>
+            <div><label>Virtual</label><span>{item.virtual_hosts}</span></div>
+          </div>
+          {item.note && <div className="compliance-note">{item.note}</div>}
+          {item.host_details && item.host_details.length > 0 && (
+            <details><summary>Host Details ({item.host_details.length})</summary>
+              <table className="data-table compact">
+                <thead><tr><th>Host</th><th>Type</th><th>Sockets</th><th>Cores</th><th>Licensed</th><th>2-Packs</th></tr></thead>
+                <tbody>{item.host_details.map((d,j) => (
+                  <tr key={j}><td>{d.hostname}</td><td>{d.type}</td><td>{d.sockets}</td><td>{d.physical_cores}</td><td>{d.licensed_cores}</td><td>{d.two_core_packs}</td></tr>
+                ))}</tbody>
+              </table>
+            </details>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Entitlements
+// ════════════════════════════════════════════════════════════════
+function Entitlements() {
+  const { data, loading, reload } = useFetch('/entitlements');
+  const [form, setForm] = useState(null);
+
+  const save = async () => {
+    const method = form.id ? 'PUT' : 'POST';
+    const url = form.id ? `${API}/entitlements/${form.id}` : `${API}/entitlements`;
+    await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+    setForm(null); reload();
+  };
+
+  const del = async (id) => {
+    if (!confirm('Delete?')) return;
+    await fetch(`${API}/entitlements/${id}`, { method: 'DELETE' });
+    reload();
+  };
+
+  if (loading || !data) return <Spinner />;
+  const ents = data.entitlements || [];
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Entitlements</h1>
+        <button className="btn btn-primary" onClick={() => setForm({ product_name: '', product_family: 'WindowsServer', edition: 'Standard', license_type: 'core_2pack', quantity: 1 })}>+ Add</button>
+      </div>
+      <table className="data-table">
+        <thead><tr><th>Product</th><th>Family</th><th>Edition</th><th>Type</th><th>Qty</th><th>Agreement</th><th>Expiry</th><th>Actions</th></tr></thead>
+        <tbody>{ents.map(e => (
+          <tr key={e.id}><td>{e.product_name}</td><td>{e.product_family}</td><td>{e.edition}</td><td>{e.license_type}</td><td>{e.quantity}</td>
+          <td>{e.agreement_number}</td><td>{e.expiry_date || '—'}</td>
+          <td><button className="btn-sm" onClick={() => setForm({...e})}>Edit</button> <button className="btn-sm btn-danger" onClick={() => del(e.id)}>Delete</button></td></tr>
+        ))}</tbody>
+      </table>
+      {form && (
+        <div className="modal-overlay" onClick={() => setForm(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{form.id ? 'Edit' : 'Add'} Entitlement</h3>
+            <div className="form-grid">
+              <label>Product<input value={form.product_name} onChange={e => setForm({...form, product_name: e.target.value})} /></label>
+              <label>Family<select value={form.product_family||''} onChange={e => setForm({...form, product_family: e.target.value})}>
+                <option value="WindowsServer">Windows Server</option><option value="SQLServer">SQL Server</option><option value="Office">Office</option><option value="Other">Other</option>
+              </select></label>
+              <label>Edition<input value={form.edition||''} onChange={e => setForm({...form, edition: e.target.value})} /></label>
+              <label>License Type<select value={form.license_type||''} onChange={e => setForm({...form, license_type: e.target.value})}>
+                <option value="core_2pack">Core 2-Pack</option><option value="core">Core</option><option value="cal_device">CAL (Device)</option><option value="cal_user">CAL (User)</option>
+              </select></label>
+              <label>Quantity<input type="number" value={form.quantity} onChange={e => setForm({...form, quantity: parseInt(e.target.value)||0})} /></label>
+              <label>Agreement #<input value={form.agreement_number||''} onChange={e => setForm({...form, agreement_number: e.target.value})} /></label>
+              <label>Expiry<input type="date" value={form.expiry_date||''} onChange={e => setForm({...form, expiry_date: e.target.value})} /></label>
+              <label className="checkbox-label"><input type="checkbox" checked={form.sa_included||false} onChange={e => setForm({...form, sa_included: e.target.checked})} /> SA Included</label>
+            </div>
+            <div className="modal-actions"><button className="btn btn-primary" onClick={save}>Save</button><button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Scanners (targets, credentials, vCenter, scan history)
+// ════════════════════════════════════════════════════════════════
+function Scanners() {
+  const [tab, setTab] = useState('targets');
+  return (
+    <div>
+      <h1>Scanners</h1>
+      <div className="tab-bar">
+        {['targets','credentials','vcenter','history'].map(t => (
+          <button key={t} className={`tab ${tab===t?'active':''}`} onClick={() => setTab(t)}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>
+        ))}
+        <button className="btn btn-primary" style={{marginLeft:'auto'}} onClick={async () => { await fetch(`${API}/scans/trigger`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}); alert('Scan triggered'); }}>
+          Run Scan Now
+        </button>
+      </div>
+      {tab === 'targets' && <TargetsTab />}
+      {tab === 'credentials' && <CredentialsTab />}
+      {tab === 'vcenter' && <VCenterTab />}
+      {tab === 'history' && <ScanHistory />}
+    </div>
+  );
+}
+
+function TargetsTab() {
+  const { data, loading, reload } = useFetch('/targets');
+  const [newHost, setNewHost] = useState('');
+  const [scanType, setScanType] = useState('winrm');
+
+  const add = async () => {
+    if (!newHost.trim()) return;
+    // Support multi-line paste
+    const lines = newHost.split(/[\n,;]+/).map(l => l.trim()).filter(Boolean);
+    if (lines.length > 1) {
+      await fetch(`${API}/targets/bulk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hostnames: lines, scan_type: scanType }) });
+    } else {
+      await fetch(`${API}/targets`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hostname: lines[0], scan_type: scanType }) });
+    }
+    setNewHost(''); reload();
+  };
+
+  const del = async (id) => { await fetch(`${API}/targets/${id}`, { method: 'DELETE' }); reload(); };
+  if (loading || !data) return <Spinner />;
+  const targets = data.targets || [];
+
+  return (
+    <div>
+      <div className="input-row">
+        <textarea value={newHost} onChange={e => setNewHost(e.target.value)} placeholder="Hostname, IP, or subnet (one per line)" rows={2} />
+        <select value={scanType} onChange={e => setScanType(e.target.value)}><option value="winrm">WinRM</option><option value="snmp">SNMP</option></select>
+        <button className="btn btn-primary" onClick={add}>Add</button>
+      </div>
+      <table className="data-table">
+        <thead><tr><th>Hostname</th><th>Type</th><th>Subnet</th><th>Enabled</th><th>Actions</th></tr></thead>
+        <tbody>{targets.map(t => (
+          <tr key={t.id}><td>{t.hostname}</td><td>{t.scan_type}</td><td>{t.is_subnet ? 'Yes' : ''}</td><td>{t.enabled ? '✓' : '✗'}</td>
+          <td><button className="btn-sm btn-danger" onClick={() => del(t.id)}>Delete</button></td></tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function CredentialsTab() {
+  const { data, loading, reload } = useFetch('/credentials');
+  const [form, setForm] = useState(null);
+
+  const save = async () => {
+    const method = form.id ? 'PUT' : 'POST';
+    const url = form.id ? `${API}/credentials/${form.id}` : `${API}/credentials`;
+    await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+    setForm(null); reload();
+  };
+
+  if (loading || !data) return <Spinner />;
+  return (
+    <div>
+      <button className="btn btn-primary" onClick={() => setForm({ name: '', cred_type: 'winrm', username: '', password: '', domain: '', transport: 'ntlm' })}>+ Add Credential</button>
+      <table className="data-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Username</th><th>Domain</th><th>Actions</th></tr></thead>
+        <tbody>{(data.credentials||[]).map(c => (
+          <tr key={c.id}><td>{c.name}</td><td>{c.cred_type}</td><td>{c.username}</td><td>{c.domain}</td>
+          <td><button className="btn-sm" onClick={async () => { const raw = await fetch(`${API}/credentials/${c.id}/raw`).then(r=>r.json()); setForm(raw); }}>Edit</button></td></tr>
+        ))}</tbody>
+      </table>
+      {form && (
+        <div className="modal-overlay" onClick={() => setForm(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{form.id ? 'Edit' : 'Add'} Credential</h3>
+            <div className="form-grid">
+              <label>Name<input value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></label>
+              <label>Type<select value={form.cred_type} onChange={e => setForm({...form, cred_type: e.target.value})}><option value="winrm">WinRM</option><option value="vcenter">vCenter</option><option value="snmp">SNMP</option></select></label>
+              <label>Username<input value={form.username||''} onChange={e => setForm({...form, username: e.target.value})} /></label>
+              <label>Password<input type="password" value={form.password||''} onChange={e => setForm({...form, password: e.target.value})} /></label>
+              <label>Domain<input value={form.domain||''} onChange={e => setForm({...form, domain: e.target.value})} /></label>
+            </div>
+            <div className="modal-actions"><button className="btn btn-primary" onClick={save}>Save</button><button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VCenterTab() {
+  const { data, loading, reload } = useFetch('/vcenter-instances');
+  const creds = useFetch('/credentials');
+  const [form, setForm] = useState(null);
+
+  const save = async () => {
+    const method = form.id ? 'PUT' : 'POST';
+    const url = form.id ? `${API}/vcenter-instances/${form.id}` : `${API}/vcenter-instances`;
+    await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+    setForm(null); reload();
+  };
+
+  const del = async (id) => { await fetch(`${API}/vcenter-instances/${id}`, { method: 'DELETE' }); reload(); };
+
+  if (loading || !data) return <Spinner />;
+  const vcCreds = (creds.data?.credentials || []).filter(c => c.cred_type === 'vcenter');
+  return (
+    <div>
+      <button className="btn btn-primary" onClick={() => setForm({ name: '', hostname: '', credential_id: null, enabled: true })}>+ Add vCenter</button>
+      <table className="data-table">
+        <thead><tr><th>Name</th><th>Hostname</th><th>Credential</th><th>Enabled</th><th>Last Scan</th><th>Hosts</th><th>VMs</th><th>Actions</th></tr></thead>
+        <tbody>{(data.instances||[]).map(v => (
+          <tr key={v.id}><td>{v.name}</td><td>{v.hostname}</td><td>{v.credential_name||'—'}</td><td>{v.enabled?'✓':'✗'}</td>
+          <td>{v.last_scan ? new Date(v.last_scan).toLocaleDateString() : '—'}</td><td>{v.hosts_found}</td><td>{v.vms_found}</td>
+          <td><button className="btn-sm" onClick={() => setForm({...v})}>Edit</button> <button className="btn-sm btn-danger" onClick={() => del(v.id)}>Delete</button></td></tr>
+        ))}</tbody>
+      </table>
+      {form && (
+        <div className="modal-overlay" onClick={() => setForm(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>{form.id ? 'Edit' : 'Add'} vCenter</h3>
+            <div className="form-grid">
+              <label>Name<input value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></label>
+              <label>Hostname<input value={form.hostname} onChange={e => setForm({...form, hostname: e.target.value})} /></label>
+              <label>Credential<select value={form.credential_id||''} onChange={e => setForm({...form, credential_id: parseInt(e.target.value)||null})}>
+                <option value="">Use global settings</option>
+                {vcCreds.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select></label>
+              <label className="checkbox-label"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form, enabled: e.target.checked})} /> Enabled</label>
+            </div>
+            <div className="modal-actions"><button className="btn btn-primary" onClick={save}>Save</button><button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScanHistory() {
+  const { data, loading } = useFetch('/scans');
+  if (loading || !data) return <Spinner />;
+  return (
+    <table className="data-table">
+      <thead><tr><th>ID</th><th>Type</th><th>Started</th><th>Completed</th><th>Scanned</th><th>Failed</th><th>Status</th></tr></thead>
+      <tbody>{(data.scans||[]).map(s => (
+        <tr key={s.id}><td>{s.id}</td><td>{s.scan_type}</td><td>{new Date(s.started_at).toLocaleString()}</td>
+        <td>{s.completed_at ? new Date(s.completed_at).toLocaleString() : '—'}</td><td>{s.hosts_scanned}</td><td>{s.hosts_failed}</td>
+        <td><Badge color={s.status==='completed'?'green':s.status==='error'?'red':'yellow'}>{s.status}</Badge></td></tr>
+      ))}</tbody>
+    </table>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Settings
+// ════════════════════════════════════════════════════════════════
+function Settings() {
+  const { data, loading, reload } = useFetch('/settings');
+  const [edits, setEdits] = useState({});
+  const [apiKey, setApiKey] = useState(null);
+
+  const save = async () => {
+    await fetch(`${API}/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: edits }) });
+    setEdits({}); reload();
+  };
+
+  const genKey = async () => {
+    const res = await fetch(`${API}/settings/generate-api-key`, { method: 'POST' });
+    const d = await res.json();
+    setApiKey(d.key);
+  };
+
+  if (loading || !data) return <Spinner />;
+  const settings = data.settings || [];
+  const categories = [...new Set(settings.map(s => s.category))];
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Settings</h1>
+        <button className="btn btn-primary" onClick={save} disabled={!Object.keys(edits).length}>Save Changes</button>
+      </div>
+      {categories.map(cat => (
+        <div key={cat} className="settings-section">
+          <h3>{cat.charAt(0).toUpperCase() + cat.slice(1)}</h3>
+          {settings.filter(s => s.category === cat).map(s => (
+            <div key={s.key} className="setting-row">
+              <label>{s.description || s.key}</label>
+              <input type={s.sensitive ? 'password' : 'text'}
+                value={edits[s.key] !== undefined ? edits[s.key] : s.value}
+                onChange={e => setEdits({...edits, [s.key]: e.target.value})} />
+            </div>
+          ))}
+        </div>
+      ))}
+      <div className="settings-section">
+        <h3>Agent API Key</h3>
+        <p>Generate a new API key for push-mode agents.</p>
+        <button className="btn btn-secondary" onClick={genKey}>Generate New Key</button>
+        {apiKey && <div className="info-box"><strong>New key (copy now — won't be shown again):</strong><br /><code>{apiKey}</code></div>}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// System Update
+// ════════════════════════════════════════════════════════════════
+function SystemUpdate() {
+  const { data: version, loading: vLoading, reload: reloadVersion } = useFetch('/system/version');
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateResult, setUpdateResult] = useState(null);
+  const { data: history } = useFetch('/system/update-history');
+
+  const checkUpdates = async () => {
+    setChecking(true);
+    try {
+      const res = await fetch(`${API}/system/check-updates`);
+      setUpdateInfo(await res.json());
+    } finally { setChecking(false); }
+  };
+
+  const applyUpdate = async () => {
+    if (!confirm('Pull latest changes and rebuild?')) return;
+    setUpdating(true);
+    try {
+      const res = await fetch(`${API}/system/update`, { method: 'POST' });
+      const result = await res.json();
+      setUpdateResult(result);
+      reloadVersion();
+    } finally { setUpdating(false); }
+  };
+
+  if (vLoading) return <Spinner />;
+  return (
+    <div>
+      <h1>System Update</h1>
+
+      <div className="update-card">
+        <h3>Current Version</h3>
+        <div className="version-info">
+          <div><label>Branch</label><span>{version?.branch}</span></div>
+          <div><label>Commit</label><span><code>{version?.current_hash}</code></span></div>
+          <div><label>Message</label><span>{version?.last_commit}</span></div>
+          <div><label>Remote</label><span>{version?.remote}</span></div>
+        </div>
+      </div>
+
+      <div className="update-card">
+        <h3>Check for Updates</h3>
+        <button className="btn btn-primary" onClick={checkUpdates} disabled={checking}>
+          {checking ? 'Checking...' : 'Check for Updates'}
+        </button>
+        {updateInfo && (
+          <div className="update-result">
+            {updateInfo.available ? (
+              <>
+                <Badge color="yellow">Update Available</Badge>
+                <p>Current: <code>{updateInfo.current}</code> → Latest: <code>{updateInfo.latest}</code></p>
+                {updateInfo.changes?.length > 0 && (
+                  <div className="change-list">
+                    <strong>Changes:</strong>
+                    <ul>{updateInfo.changes.map((c,i) => <li key={i}>{c}</li>)}</ul>
+                  </div>
+                )}
+                <button className="btn btn-primary" onClick={applyUpdate} disabled={updating}>
+                  {updating ? 'Updating...' : 'Apply Update'}
+                </button>
+              </>
+            ) : (
+              <><Badge color="green">Up to Date</Badge><p>{updateInfo.message || updateInfo.error}</p></>
+            )}
+          </div>
+        )}
+        {updateResult && (
+          <div className={`update-result ${updateResult.status === 'updated' ? 'success' : 'error'}`}>
+            <strong>{updateResult.status === 'updated' ? 'Update applied!' : 'Update failed'}</strong>
+            <pre>{updateResult.output || updateResult.message}</pre>
+            {updateResult.restart_required && (
+              <div className="info-box">
+                <strong>Restart required.</strong> Run on the server:
+                <code>{updateResult.restart_command}</code>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {history?.history?.length > 0 && (
+        <div className="update-card">
+          <h3>Update History</h3>
+          <table className="data-table">
+            <thead><tr><th>Hash</th><th>Branch</th><th>Date</th><th>Status</th></tr></thead>
+            <tbody>{history.history.map(h => (
+              <tr key={h.id}><td><code>{h.git_hash}</code></td><td>{h.git_branch}</td><td>{new Date(h.updated_at).toLocaleString()}</td><td>{h.status}</td></tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// App Shell
+// ════════════════════════════════════════════════════════════════
+export default function App() {
+  const [page, setPage] = useState('dashboard');
+  const pages = { dashboard: Dashboard, hosts: Hosts, compliance: Compliance, entitlements: Entitlements, scanners: Scanners, settings: Settings, updates: SystemUpdate };
+  const Page = pages[page] || Dashboard;
+  return (
+    <div className="app-layout">
+      <Nav current={page} onChange={setPage} />
+      <main className="main-content"><Page /></main>
+    </div>
+  );
+}
