@@ -570,7 +570,18 @@ function ApiKeysSection() {
     await fetch(`${API}/api-keys/${id}`, { method: 'DELETE' }); reload();
   };
 
-  const copyKey = () => { navigator.clipboard.writeText(newKey); };
+  const [copied, setCopied] = useState(false);
+  const copyKey = () => {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(newKey).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = newKey; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta);
+      setCopied(true); setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   if (loading) return null;
   const keys = data?.api_keys || [];
@@ -584,7 +595,7 @@ function ApiKeysSection() {
         <div className="info-box" style={{marginBottom:'1rem',background:'#e8f5e9',border:'1px solid #4caf50'}}>
           <strong>New key created — copy now, it won't be shown again:</strong><br />
           <code style={{wordBreak:'break-all'}}>{newKey}</code><br />
-          <button className="btn btn-secondary" onClick={copyKey} style={{marginTop:'0.5rem'}}>Copy to Clipboard</button>
+          <button className="btn btn-secondary" onClick={copyKey} style={{marginTop:'0.5rem'}}>{copied ? '✓ Copied!' : 'Copy to Clipboard'}</button>
           <button className="btn btn-secondary" onClick={() => setNewKey(null)} style={{marginTop:'0.5rem',marginLeft:'0.5rem'}}>Dismiss</button>
         </div>
       )}
