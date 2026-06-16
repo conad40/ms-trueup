@@ -1,23 +1,35 @@
 """vCenter scanner — connects via pyVmomi, discovers ESXi hosts and VMs."""
-import logging, ssl, atexit
+import logging, ssl, atexit, socket
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 
 log = logging.getLogger("trueup.vcenter")
+
+# Connection timeout in seconds
+CONNECT_TIMEOUT = 30
 
 
 def _connect(host, user, password, port=443, verify_ssl=False):
     """Connect to vCenter and return ServiceInstance."""
     from pyVmomi import vim
     from pyVim.connect import SmartConnect, Disconnect
+
+    # Set a default socket timeout so SmartConnect doesn't hang forever
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(CONNECT_TIMEOUT)
+
     ctx = None
     if not verify_ssl:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-    si = SmartConnect(host=host, user=user, pwd=password, port=int(port), sslContext=ctx)
-    atexit.register(Disconnect, si)
-    return si
+    try:
+        log.info(f"Connecting to vCenter {host}:{port} as {user}")
+        si = SmartConnect(host=host, user=user, pwd=password, port=int(port), sslContext=ctx)
+        atexit.register(Disconnect, si)
+        return si
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 def _get_all_vms_and_hosts(si):
@@ -109,9 +121,11 @@ async def scan(pool, instances):
             domain = cred.get("domain", "")
             if domain and "@" not in user and "\\" not in user:
                 user = f"{user}@{domain}"
-            result = await loop.run_in_executor(executor, _scan_sync,
-                vc_host, user, cred.get("password", ""),
-                int(cred.get("port") or 443), bool(cred.get("verify_ssl", False)))
+            result = await asyncio.wait_for(
+                loop.run_in_executor(executor, _scan_sync,
+                    vc_host, user, cred.get("password", ""),
+                    int(cred.get("port") or 443), bool(cred.get("verify_ssl", False))),
+                timeout=300)  # 5 minute max per vCenter
 
             async with pool.acquire() as conn:
                 for h in result["hosts"]:
