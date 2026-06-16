@@ -98,6 +98,8 @@ function Hosts() {
   const [filterSource, setFilterSource] = useState('');
   const [filterType, setFilterType] = useState('');
   const [filterOS, setFilterOS] = useState('');
+  const [sortCol, setSortCol] = useState('hostname');
+  const [sortDir, setSortDir] = useState('asc');
   const { data, loading, reload } = useFetch(`/hosts?page=1&per_page=10000`);
   const inactiveRes = useFetch('/hosts/inactive');
 
@@ -171,14 +173,33 @@ function Hosts() {
     if (!os) return 'Unknown';
     return 'Other';
   }))].sort();
+  const sorted = [...filtered].sort((a, b) => {
+    let av, bv;
+    switch (sortCol) {
+      case 'hostname': av = (a.hostname||'').toLowerCase(); bv = (b.hostname||'').toLowerCase(); break;
+      case 'ip_address': av = (a.ip_address||'').split('.').map(n=>n.padStart(3,'0')).join('.'); bv = (b.ip_address||'').split('.').map(n=>n.padStart(3,'0')).join('.'); break;
+      case 'os_name': av = (a.os_name||'').toLowerCase(); bv = (b.os_name||'').toLowerCase(); break;
+      case 'type': av = a.is_virtual ? 1 : 0; bv = b.is_virtual ? 1 : 0; break;
+      case 'cpu_sockets': av = a.cpu_sockets||0; bv = b.cpu_sockets||0; break;
+      case 'cpu_cores': av = a.cpu_cores||0; bv = b.cpu_cores||0; break;
+      case 'scan_source': av = (a.scan_source||''); bv = (b.scan_source||''); break;
+      case 'last_scan': av = a.last_scan||''; bv = b.last_scan||''; break;
+      default: av = ''; bv = '';
+    }
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+  const toggleSort = (col) => { if (sortCol === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); } else { setSortCol(col); setSortDir('asc'); } setPage(1); };
+  const SortIcon = ({ col }) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ' ⇅';
   const pageSize = 50;
-  const totalPages = Math.ceil(filtered.length / pageSize);
-  const pagedHosts = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const totalPages = Math.ceil(sorted.length / pageSize);
+  const pagedHosts = sorted.slice((page - 1) * pageSize, page * pageSize);
 
   return (
     <div>
       <div className="page-header">
-        <h1>Hosts ({filtered.length}{filtered.length !== data.total ? ` / ${data.total}` : ''})</h1>
+        <h1>Hosts ({sorted.length}{sorted.length !== data.total ? ` / ${data.total}` : ''})</h1>
         <div className="header-actions">
           <button onClick={exportExcel} className="btn btn-secondary">Export Excel</button>
           <button onClick={() => setShowInactive(!showInactive)} className="btn btn-secondary">
@@ -236,8 +257,15 @@ function Hosts() {
             <thead>
               <tr>
                 <th><input type="checkbox" onChange={e => setSelected(e.target.checked ? new Set(filtered.map(h=>h.id)) : new Set())} /></th>
-                <th>Hostname</th><th>IP</th><th>OS</th><th>Type</th><th>Sockets</th><th>Cores</th>
-                <th>Source</th><th>WS License</th><th>SQL License</th><th>Last Scan</th>
+                <th style={{cursor:'pointer'}} onClick={() => toggleSort('hostname')}>Hostname<SortIcon col="hostname" /></th>
+                <th style={{cursor:'pointer'}} onClick={() => toggleSort('ip_address')}>IP<SortIcon col="ip_address" /></th>
+                <th style={{cursor:'pointer'}} onClick={() => toggleSort('os_name')}>OS<SortIcon col="os_name" /></th>
+                <th style={{cursor:'pointer'}} onClick={() => toggleSort('type')}>Type<SortIcon col="type" /></th>
+                <th style={{cursor:'pointer'}} onClick={() => toggleSort('cpu_sockets')}>Sockets<SortIcon col="cpu_sockets" /></th>
+                <th style={{cursor:'pointer'}} onClick={() => toggleSort('cpu_cores')}>Cores<SortIcon col="cpu_cores" /></th>
+                <th style={{cursor:'pointer'}} onClick={() => toggleSort('scan_source')}>Source<SortIcon col="scan_source" /></th>
+                <th>WS License</th><th>SQL License</th>
+                <th style={{cursor:'pointer'}} onClick={() => toggleSort('last_scan')}>Last Scan<SortIcon col="last_scan" /></th>
               </tr>
             </thead>
             <tbody>
@@ -656,14 +684,29 @@ function Settings() {
       {categories.map(cat => (
         <div key={cat} className="settings-section">
           <h3>{cat.charAt(0).toUpperCase() + cat.slice(1)}</h3>
-          {settings.filter(s => s.category === cat).map(s => (
-            <div key={s.key} className="setting-row">
-              <label>{s.description || s.key}</label>
-              <input type={s.sensitive ? 'password' : 'text'}
-                value={edits[s.key] !== undefined ? edits[s.key] : s.value}
-                onChange={e => setEdits({...edits, [s.key]: e.target.value})} />
-            </div>
-          ))}
+          {settings.filter(s => s.category === cat).map(s => {
+            const val = edits[s.key] !== undefined ? edits[s.key] : s.value;
+            const isToggle = s.key.endsWith('_enabled') || s.key === 'sccm_verify_ssl';
+            return (
+              <div key={s.key} className="setting-row">
+                <label>{s.description || s.key}</label>
+                {isToggle ? (
+                  <button
+                    className={`toggle-btn ${val === 'true' ? 'toggle-on' : 'toggle-off'}`}
+                    style={{
+                      padding: '0.4rem 1.2rem', borderRadius: '20px', border: 'none', cursor: 'pointer', fontWeight: 600,
+                      background: val === 'true' ? '#22c55e' : '#e5e7eb', color: val === 'true' ? '#fff' : '#374151',
+                      transition: 'all 0.2s'
+                    }}
+                    onClick={() => setEdits({...edits, [s.key]: val === 'true' ? 'false' : 'true'})}
+                  >{val === 'true' ? 'Enabled' : 'Disabled'}</button>
+                ) : (
+                  <input type={s.sensitive ? 'password' : 'text'} value={val}
+                    onChange={e => setEdits({...edits, [s.key]: e.target.value})} />
+                )}
+              </div>
+            );
+          })}
         </div>
       ))}
       <ApiKeysSection />
