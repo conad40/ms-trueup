@@ -56,8 +56,26 @@ function Nav({ current, onChange }) {
 // ════════════════════════════════════════════════════════════════
 // Dashboard
 // ════════════════════════════════════════════════════════════════
+function BarChart({ data, colorFn }) {
+  const max = Math.max(...data.map(d => d.value), 1);
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:'0.4rem'}}>
+      {data.map(d => (
+        <div key={d.label} style={{display:'flex',alignItems:'center',gap:'0.5rem'}}>
+          <span style={{width:'140px',fontSize:'0.85rem',textAlign:'right',flexShrink:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{d.label}</span>
+          <div style={{flex:1,background:'#e5e7eb',borderRadius:'4px',height:'22px',position:'relative'}}>
+            <div style={{width:`${(d.value/max)*100}%`,background:colorFn?colorFn(d):d.color||'#6366f1',borderRadius:'4px',height:'100%',minWidth: d.value > 0 ? '2px' : 0,transition:'width 0.3s'}} />
+          </div>
+          <span style={{width:'50px',fontSize:'0.85rem',fontWeight:600}}>{d.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Dashboard() {
   const { data, loading } = useFetch('/dashboard');
+  const comp = useFetch('/compliance');
   if (loading || !data) return <Spinner />;
   const cards = [
     { label: 'Physical Hosts', value: data.physical_hosts, color: '#2563eb' },
@@ -65,6 +83,12 @@ function Dashboard() {
     { label: 'Total Hosts', value: data.total_hosts, color: '#059669' },
     { label: 'SQL Instances', value: data.sql_instances, color: '#d97706' },
   ];
+
+  const compliance = comp.data?.compliance || [];
+  const sourceData = Object.entries(data.sources || {}).map(([k,v]) => ({label:k, value:v}));
+  const osData = Object.entries(data.os_breakdown || {}).map(([k,v]) => ({label:k, value:v}));
+  const sourceColors = {vcenter:'#7c3aed',agent:'#2563eb',winrm:'#059669',sccm:'#d97706',scvmm:'#dc2626'};
+
   return (
     <div>
       <h1>Dashboard</h1>
@@ -76,6 +100,7 @@ function Dashboard() {
           </div>
         ))}
       </div>
+
       {data.last_scan && (
         <div className="info-box">
           Last scan: {new Date(data.last_scan.started_at).toLocaleString()} —
@@ -83,6 +108,59 @@ function Dashboard() {
           <Badge color={data.last_scan.status === 'completed' ? 'green' : 'yellow'}>{data.last_scan.status}</Badge>
         </div>
       )}
+
+      {/* Compliance Summary */}
+      {compliance.length > 0 && (
+        <div style={{marginTop:'1.5rem'}}>
+          <h2 style={{marginBottom:'1rem'}}>Compliance Status</h2>
+          <div className="card-grid">
+            {compliance.map(g => {
+              const pct = g.entitled_cores > 0 ? Math.min(100, Math.round((g.entitled_cores / Math.max(g.required_cores,1)) * 100)) : 0;
+              const color = g.compliant ? '#22c55e' : g.gap_cores > 0 ? '#ef4444' : '#f59e0b';
+              return (
+                <div key={g.product} className="stat-card" style={{borderLeftColor: color, padding:'1rem'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.5rem'}}>
+                    <strong>{g.product}</strong>
+                    <Badge color={g.compliant ? 'green' : 'red'}>{g.compliant ? 'Compliant' : 'Gap'}</Badge>
+                  </div>
+                  <div style={{background:'#e5e7eb',borderRadius:'6px',height:'12px',marginBottom:'0.5rem',overflow:'hidden'}}>
+                    <div style={{width:`${pct}%`,height:'100%',background:color,borderRadius:'6px',transition:'width 0.3s'}} />
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:'0.85rem',color:'#6b7280'}}>
+                    <span>Entitled: {g.entitled_cores} cores</span>
+                    <span>Required: {g.required_cores} cores</span>
+                  </div>
+                  {g.gap_cores > 0 && (
+                    <div style={{fontSize:'0.85rem',color:'#ef4444',fontWeight:600,marginTop:'0.25rem'}}>
+                      Gap: {g.gap_cores} cores ({g.gap_2packs} two-core packs)
+                    </div>
+                  )}
+                  <div style={{fontSize:'0.8rem',color:'#9ca3af',marginTop:'0.25rem'}}>
+                    {g.physical_hosts} physical · {g.virtual_hosts} VMs
+                    {g.note ? ` · ${g.note}` : ''}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Source & OS Breakdown */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1.5rem',marginTop:'1.5rem'}}>
+        {sourceData.length > 0 && (
+          <div className="stat-card" style={{padding:'1rem'}}>
+            <h3 style={{marginBottom:'0.75rem'}}>Hosts by Source</h3>
+            <BarChart data={sourceData} colorFn={d => sourceColors[d.label] || '#6366f1'} />
+          </div>
+        )}
+        {osData.length > 0 && (
+          <div className="stat-card" style={{padding:'1rem'}}>
+            <h3 style={{marginBottom:'0.75rem'}}>Hosts by OS</h3>
+            <BarChart data={osData} colorFn={() => '#6366f1'} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -325,10 +325,33 @@ async def dashboard():
         sql_count = await conn.fetchval("SELECT COUNT(*) FROM sql_instances")
         products = await conn.fetchval("SELECT COUNT(DISTINCT product_family) FROM installed_products")
         last_scan = await conn.fetchrow("SELECT * FROM scan_log ORDER BY id DESC LIMIT 1")
+        # Source breakdown
+        source_rows = await conn.fetch("SELECT scan_source, COUNT(*) as cnt FROM hosts WHERE status='active' GROUP BY scan_source ORDER BY cnt DESC")
+        sources = {r["scan_source"]: r["cnt"] for r in source_rows}
+        # OS breakdown
+        os_rows = await conn.fetch("""
+            SELECT CASE
+                WHEN os_name ILIKE '%esxi%' THEN 'VMware ESXi'
+                WHEN os_name ILIKE '%windows server 2022%' THEN 'Windows Server 2022'
+                WHEN os_name ILIKE '%windows server 2019%' THEN 'Windows Server 2019'
+                WHEN os_name ILIKE '%windows server 2016%' THEN 'Windows Server 2016'
+                WHEN os_name ILIKE '%windows server 2012%' THEN 'Windows Server 2012'
+                WHEN os_name ILIKE '%windows server%' THEN 'Windows Server (Other)'
+                WHEN os_name ILIKE '%red hat%' OR os_name ILIKE '%rhel%' THEN 'Red Hat Linux'
+                WHEN os_name ILIKE '%ubuntu%' THEN 'Ubuntu Linux'
+                WHEN os_name ILIKE '%suse%' THEN 'SUSE Linux'
+                WHEN os_name ILIKE '%linux%' THEN 'Linux (Other)'
+                WHEN os_name IS NULL OR os_name = '' THEN 'Unknown'
+                ELSE 'Other'
+            END as os_group, COUNT(*) as cnt
+            FROM hosts WHERE status='active' GROUP BY os_group ORDER BY cnt DESC
+        """)
+        os_breakdown = {r["os_group"]: r["cnt"] for r in os_rows}
         return {
             "total_hosts": hosts, "physical_hosts": hosts - vms, "virtual_hosts": vms,
             "sql_instances": sql_count, "product_families": products,
             "last_scan": dict(last_scan) if last_scan else None,
+            "sources": sources, "os_breakdown": os_breakdown,
         }
 
 
