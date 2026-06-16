@@ -38,17 +38,18 @@ const PAGES = [
 
 function Nav({ current, onChange }) {
   return (
-    <nav className="sidebar">
-      <div className="sidebar-header">
+    <nav className="topnav">
+      <div className="topnav-brand">
         <h2>MS True-Up</h2>
-        <small>License Management</small>
       </div>
-      {PAGES.map(p => (
-        <button key={p.id} className={`nav-btn ${current === p.id ? 'active' : ''}`}
-          onClick={() => onChange(p.id)}>
-          <span className="nav-icon">{p.icon}</span> {p.label}
-        </button>
-      ))}
+      <div className="topnav-links">
+        {PAGES.map(p => (
+          <button key={p.id} className={`nav-btn ${current === p.id ? 'active' : ''}`}
+            onClick={() => onChange(p.id)}>
+            <span className="nav-icon">{p.icon}</span> {p.label}
+          </button>
+        ))}
+      </div>
     </nav>
   );
 }
@@ -56,6 +57,44 @@ function Nav({ current, onChange }) {
 // ════════════════════════════════════════════════════════════════
 // Dashboard
 // ════════════════════════════════════════════════════════════════
+function DonutChart({ data, size = 180, thickness = 32 }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const radius = (size - thickness) / 2;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:'1.5rem',flexWrap:'wrap',justifyContent:'center'}}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        {data.map((d, i) => {
+          const pct = total > 0 ? d.value / total : 0;
+          const dash = pct * circumference;
+          const gap = circumference - dash;
+          const rotation = (offset / total) * 360 - 90;
+          offset += d.value;
+          return (
+            <circle key={i} cx={size/2} cy={size/2} r={radius}
+              fill="none" stroke={d.color} strokeWidth={thickness}
+              strokeDasharray={`${dash} ${gap}`}
+              transform={`rotate(${rotation} ${size/2} ${size/2})`}
+              style={{transition:'stroke-dasharray 0.4s ease'}} />
+          );
+        })}
+        <text x={size/2} y={size/2-6} textAnchor="middle" style={{fontSize:'1.5rem',fontWeight:700,fill:'var(--text)'}}>{total.toLocaleString()}</text>
+        <text x={size/2} y={size/2+14} textAnchor="middle" style={{fontSize:'0.7rem',fill:'var(--text-muted)',fontWeight:500}}>TOTAL</text>
+      </svg>
+      <div style={{display:'flex',flexDirection:'column',gap:'0.35rem'}}>
+        {data.map((d, i) => (
+          <div key={i} style={{display:'flex',alignItems:'center',gap:'0.45rem',fontSize:'0.8rem'}}>
+            <span style={{width:10,height:10,borderRadius:2,background:d.color,flexShrink:0}} />
+            <span style={{color:'var(--text-secondary)'}}>{d.label}</span>
+            <span style={{fontWeight:600,marginLeft:'auto',paddingLeft:'0.5rem',fontVariantNumeric:'tabular-nums'}}>{d.value.toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function BarChart({ data, colorFn }) {
   const max = Math.max(...data.map(d => d.value), 1);
   return (
@@ -76,18 +115,36 @@ function BarChart({ data, colorFn }) {
 function Dashboard() {
   const { data, loading } = useFetch('/dashboard');
   const comp = useFetch('/compliance');
+  const scans = useFetch('/scans?limit=30');
   if (loading || !data) return <Spinner />;
   const cards = [
-    { label: 'Physical Hosts', value: data.physical_hosts, color: '#2563eb' },
-    { label: 'Virtual Hosts', value: data.virtual_hosts, color: '#7c3aed' },
-    { label: 'Total Hosts', value: data.total_hosts, color: '#059669' },
-    { label: 'SQL Instances', value: data.sql_instances, color: '#d97706' },
+    { label: 'Physical Hosts', value: data.physical_hosts, color: '#0891b2' },
+    { label: 'Virtual Hosts', value: data.virtual_hosts, color: '#6e56cf' },
+    { label: 'Total Hosts', value: data.total_hosts, color: '#30a46c' },
+    { label: 'SQL Instances', value: data.sql_instances, color: '#e5a000' },
   ];
 
   const compliance = comp.data?.compliance || [];
   const sourceData = Object.entries(data.sources || {}).map(([k,v]) => ({label:k, value:v}));
   const osData = Object.entries(data.os_breakdown || {}).map(([k,v]) => ({label:k, value:v}));
-  const sourceColors = {vcenter:'#6e56cf',agent:'#4f6ef7',winrm:'#30a46c',sccm:'#e5a000',scvmm:'#e5484d'};
+  const sourceColors = {vcenter:'#6e56cf',agent:'#0891b2',winrm:'#30a46c',sccm:'#e5a000',scvmm:'#e5484d'};
+  const sourceDonut = sourceData.map(d => ({...d, color: sourceColors[d.label] || '#8b95a5'}));
+
+  // Type donut
+  const typeDonut = [
+    { label: 'Physical', value: data.physical_hosts, color: '#0891b2' },
+    { label: 'Virtual', value: data.virtual_hosts, color: '#6e56cf' },
+  ];
+
+  // OS donut - top 6 + other
+  const osSorted = [...osData].sort((a,b) => b.value - a.value);
+  const osColors = ['#0891b2','#6e56cf','#30a46c','#e5a000','#e5484d','#8b5cf6','#8b95a5'];
+  const osTop = osSorted.slice(0,6).map((d,i) => ({...d, color: osColors[i]}));
+  const osRest = osSorted.slice(6).reduce((s,d) => s + d.value, 0);
+  if (osRest > 0) osTop.push({label:'Other', value: osRest, color: osColors[6]});
+
+  // Scan history for bar chart
+  const scanList = (scans.data?.scans || []).filter(s => s.hosts_scanned > 0).reverse().slice(-14);
 
   return (
     <div>
@@ -146,21 +203,49 @@ function Dashboard() {
         </div>
       )}
 
-      {/* Source & OS Breakdown */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1rem',marginTop:'1.5rem'}}>
-        {sourceData.length > 0 && (
-          <div className="stat-card" style={{padding:'1.25rem',borderLeftColor:'var(--primary)'}}>
-            <h3 style={{marginBottom:'0.85rem'}}>Hosts by Source</h3>
-            <BarChart data={sourceData} colorFn={d => sourceColors[d.label] || 'var(--primary)'} />
+      {/* Donut Charts Row */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3, 1fr)',gap:'1rem',marginTop:'1.5rem'}}>
+        <div className="chart-card">
+          <h3>Computer Types</h3>
+          <DonutChart data={typeDonut} />
+        </div>
+        {sourceDonut.length > 0 && (
+          <div className="chart-card">
+            <h3>Discovery Sources</h3>
+            <DonutChart data={sourceDonut} />
           </div>
         )}
-        {osData.length > 0 && (
-          <div className="stat-card" style={{padding:'1.25rem',borderLeftColor:'var(--primary)'}}>
-            <h3 style={{marginBottom:'0.85rem'}}>Hosts by OS</h3>
-            <BarChart data={osData} colorFn={() => 'var(--primary)'} />
+        {osTop.length > 0 && (
+          <div className="chart-card">
+            <h3>Operating Systems</h3>
+            <DonutChart data={osTop} size={180} thickness={28} />
           </div>
         )}
       </div>
+
+      {/* Scan History */}
+      {scanList.length > 0 && (
+        <div className="chart-card" style={{marginTop:'1rem'}}>
+          <h3>Scan History</h3>
+          <div style={{display:'flex',alignItems:'flex-end',gap:'4px',height:'120px',marginTop:'0.5rem'}}>
+            {scanList.map((s, i) => {
+              const maxVal = Math.max(...scanList.map(x => x.hosts_scanned), 1);
+              const h = Math.max((s.hosts_scanned / maxVal) * 100, 2);
+              const date = new Date(s.started_at);
+              const label = `${date.getMonth()+1}/${date.getDate()}`;
+              return (
+                <div key={i} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px'}}>
+                  <span style={{fontSize:'0.65rem',color:'var(--text-muted)',fontVariantNumeric:'tabular-nums'}}>{s.hosts_scanned > 0 ? s.hosts_scanned.toLocaleString() : ''}</span>
+                  <div title={`${date.toLocaleString()}: ${s.hosts_scanned} scanned`}
+                    style={{width:'100%',maxWidth:'40px',height:`${h}%`,background: s.status==='completed'?'var(--primary)':s.status==='error'?'var(--danger)':'var(--warning)',
+                      borderRadius:'3px 3px 0 0',transition:'height 0.3s ease',cursor:'pointer',opacity:0.85}} />
+                  <span style={{fontSize:'0.6rem',color:'var(--text-muted)',whiteSpace:'nowrap'}}>{label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
