@@ -580,6 +580,19 @@ async def compliance_report():
                     std_hostnames.add(name_upper)
                     std_hostnames.add(name_upper.split(".")[0])
 
+        # Count Windows VMs per hypervisor host
+        win_vms_per_hyp = {}
+        total_vms_per_hyp = {}
+        for h in all_hosts:
+            if h["is_virtual"] and h.get("hypervisor_host"):
+                hyp = h["hypervisor_host"].upper()
+                hyp_short = hyp.split(".")[0]
+                total_vms_per_hyp[hyp] = total_vms_per_hyp.get(hyp, 0) + 1
+                total_vms_per_hyp[hyp_short] = total_vms_per_hyp.get(hyp_short, 0) + 1
+                if _is_windows_server(h.get("os_name")):
+                    win_vms_per_hyp[hyp] = win_vms_per_hyp.get(hyp, 0) + 1
+                    win_vms_per_hyp[hyp_short] = win_vms_per_hyp.get(hyp_short, 0) + 1
+
         # Classify hosts
         ws_hosts = [h for h in all_hosts
                     if _is_windows_server(h["os_name"])
@@ -641,10 +654,14 @@ async def compliance_report():
                 cps = max(cores // sockets if sockets else cores, 8) if cores else 8
                 hc = max(cps * sockets, 16)
                 total_cores += hc
+                hname_upper = h["hostname"].upper()
+                wvms = win_vms_per_hyp.get(hname_upper, 0) or win_vms_per_hyp.get(hname_upper.split(".")[0], 0)
+                tvms = total_vms_per_hyp.get(hname_upper, 0) or total_vms_per_hyp.get(hname_upper.split(".")[0], 0)
                 host_details.append({"hostname": h["hostname"], "sockets": sockets,
                     "physical_cores": cores, "licensed_cores": hc,
                     "two_core_packs": math.ceil(hc / 2), "type": "physical",
-                    "status": "needs_license", "reason": "Physical host — 1 base license required"})
+                    "status": "needs_license", "reason": "Physical host — 1 base license required",
+                    "windows_vm_count": wvms, "total_vm_count": tvms})
 
             # Standard stacking: group VMs by hypervisor
             if edition == "Standard":
@@ -657,6 +674,8 @@ async def compliance_report():
 
                     hyp_summary.append({
                         "hypervisor": hyp_key, "vm_count": vm_count,
+                        "windows_vm_count": win_vms_per_hyp.get(hyp_key, 0),
+                        "total_vm_count": total_vms_per_hyp.get(hyp_key, 0),
                         "licenses_needed": licenses_needed,
                         "base_included": 1, "extra_stacked": extra_licenses,
                         "extra_cores": extra_cores

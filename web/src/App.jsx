@@ -249,13 +249,14 @@ function Dashboard() {
                     <h4 style={{fontSize:'0.85rem',margin:'0 0 0.5rem'}}>Stacking Summary by Hypervisor</h4>
                     <table className="data-table" style={{fontSize:'0.82rem'}}>
                       <thead>
-                        <tr><th>Hypervisor Host</th><th>VMs</th><th>Licenses Needed</th><th>Base</th><th>Stacked</th><th>Extra Cores</th></tr>
+                        <tr><th>Hypervisor Host</th><th>Win VMs</th><th>Total VMs</th><th>Licenses Needed</th><th>Base</th><th>Stacked</th><th>Extra Cores</th></tr>
                       </thead>
                       <tbody>
                         {hypSummary.sort((a,b) => b.vm_count - a.vm_count).map((hs, i) => (
                           <tr key={i} style={hs.extra_stacked > 0 ? {background:'#fffbeb'} : {}}>
                             <td><strong>{hs.hypervisor}</strong></td>
-                            <td>{hs.vm_count}</td>
+                            <td style={{fontWeight:600,color:'var(--primary)'}}>{hs.windows_vm_count || 0}</td>
+                            <td style={{color:'var(--text-secondary)'}}>{hs.total_vm_count || 0}</td>
                             <td style={{fontWeight:600}}>{hs.licenses_needed}</td>
                             <td>1</td>
                             <td style={{fontWeight:600,color: hs.extra_stacked > 0 ? '#d97706' : 'var(--text-secondary)'}}>
@@ -268,7 +269,8 @@ function Dashboard() {
                       <tfoot>
                         <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>
                           <td>Total</td>
-                          <td>{hypSummary.reduce((s,h) => s + h.vm_count, 0)}</td>
+                          <td>{hypSummary.reduce((s,h) => s + (h.windows_vm_count||0), 0)}</td>
+                          <td>{hypSummary.reduce((s,h) => s + (h.total_vm_count||0), 0)}</td>
                           <td>{hypSummary.reduce((s,h) => s + h.licenses_needed, 0)}</td>
                           <td>{hypSummary.length}</td>
                           <td style={{color:'#d97706'}}>+{hypSummary.reduce((s,h) => s + h.extra_stacked, 0)}</td>
@@ -288,7 +290,7 @@ function Dashboard() {
                     <h4 style={{fontSize:'0.85rem',margin:'0 0 0.5rem'}}>Physical Hosts ({physicals.length})</h4>
                     <div style={{maxHeight:'300px',overflow:'auto'}}>
                       <table className="data-table" style={{fontSize:'0.82rem'}}>
-                        <thead><tr><th>Hostname</th><th>Sockets</th><th>Cores</th><th>Licensed Cores</th><th>2-Core Packs</th></tr></thead>
+                        <thead><tr><th>Hostname</th><th>Sockets</th><th>Cores</th><th>Licensed Cores</th><th>2-Core Packs</th><th>Win VMs</th><th>Total VMs</th></tr></thead>
                         <tbody>
                           {physicals.sort((a,b) => b.licensed_cores - a.licensed_cores).map((h,i) => (
                             <tr key={i}>
@@ -297,6 +299,8 @@ function Dashboard() {
                               <td>{h.physical_cores}</td>
                               <td style={{fontWeight:600}}>{h.licensed_cores}</td>
                               <td>{h.two_core_packs}</td>
+                              <td style={{fontWeight:600,color: h.windows_vm_count > 0 ? 'var(--primary)' : 'var(--text-muted)'}}>{h.windows_vm_count || 0}</td>
+                              <td style={{color:'var(--text-secondary)'}}>{h.total_vm_count || 0}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -306,6 +310,8 @@ function Dashboard() {
                             <td>{physicals.reduce((s,h) => s + h.physical_cores, 0)}</td>
                             <td>{physicals.reduce((s,h) => s + h.licensed_cores, 0)}</td>
                             <td>{physicals.reduce((s,h) => s + h.two_core_packs, 0)}</td>
+                            <td>{physicals.reduce((s,h) => s + (h.windows_vm_count||0), 0)}</td>
+                            <td>{physicals.reduce((s,h) => s + (h.total_vm_count||0), 0)}</td>
                           </tr>
                         </tfoot>
                       </table>
