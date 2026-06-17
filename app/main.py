@@ -598,15 +598,20 @@ async def compliance_report():
 
         # Classify VMs
         covered_dc_count = 0
+        covered_dc_vms = []
+        covered_std_vms = []
         std_vms_per_host = {}
         uncovered_by_ed = {}
+        excluded_vms = []  # license_override = None/Vendor
         for vm in all_vms:
             if vm.get("license_override") in ("None", "Vendor"):
+                excluded_vms.append(vm)
                 continue
             hyp = (vm.get("hypervisor_host") or "").upper()
             hyp_short = hyp.split(".")[0] if hyp else ""
             if hyp in dc_hostnames or hyp_short in dc_hostnames:
                 covered_dc_count += 1
+                covered_dc_vms.append(vm)
             elif hyp_short in std_hostnames or hyp in std_hostnames:
                 key = hyp_short or hyp
                 std_vms_per_host.setdefault(key, 0)
@@ -614,6 +619,8 @@ async def compliance_report():
                 if std_vms_per_host[key] > 2:
                     ed = _eff_edition(vm)
                     uncovered_by_ed.setdefault(ed, []).append(vm)
+                else:
+                    covered_std_vms.append(vm)
             else:
                 ed = _eff_edition(vm)
                 uncovered_by_ed.setdefault(ed, []).append(vm)
@@ -630,7 +637,8 @@ async def compliance_report():
                 total_cores += hc
                 host_details.append({"hostname": h["hostname"], "sockets": sockets,
                     "physical_cores": cores, "licensed_cores": hc,
-                    "two_core_packs": math.ceil(hc / 2), "type": "physical"})
+                    "two_core_packs": math.ceil(hc / 2), "type": "physical",
+                    "status": "needs_license", "reason": "Physical host requires own license"})
 
             uncovered = uncovered_by_ed.get(edition, [])
             if edition != "Datacenter" and uncovered:
@@ -638,9 +646,28 @@ async def compliance_report():
                 total_cores += extra
 
             for vm in uncovered:
+                hyp = vm.get("hypervisor_host") or "Unknown"
                 host_details.append({"hostname": vm["hostname"], "sockets": vm["cpu_sockets"] or 1,
                     "physical_cores": vm["cpu_cores"] or 0, "licensed_cores": 16,
-                    "two_core_packs": 8, "type": "vm"})
+                    "two_core_packs": 8, "type": "vm",
+                    "status": "needs_license", "reason": f"VM not covered (host: {hyp})",
+                    "hypervisor_host": hyp})
+
+            # Add covered VMs so user can see the full picture
+            if edition == "Datacenter":
+                for vm in covered_dc_vms:
+                    host_details.append({"hostname": vm["hostname"], "sockets": vm["cpu_sockets"] or 1,
+                        "physical_cores": vm["cpu_cores"] or 0, "licensed_cores": 0,
+                        "two_core_packs": 0, "type": "vm",
+                        "status": "covered", "reason": f"Covered by DC host ({vm.get('hypervisor_host','')})",
+                        "hypervisor_host": vm.get("hypervisor_host", "")})
+            elif edition == "Standard":
+                for vm in covered_std_vms:
+                    host_details.append({"hostname": vm["hostname"], "sockets": vm["cpu_sockets"] or 1,
+                        "physical_cores": vm["cpu_cores"] or 0, "licensed_cores": 0,
+                        "two_core_packs": 0, "type": "vm",
+                        "status": "covered", "reason": f"Covered by Std host ({vm.get('hypervisor_host','')}), 2 VM allowance",
+                        "hypervisor_host": vm.get("hypervisor_host", "")})
 
             packs = math.ceil(total_cores / 2)
             entitled = await conn.fetchval("""
@@ -730,7 +757,10 @@ async def compliance_report():
                     "licensed_cores": hc, "two_core_packs": math.ceil(hc/2),
                     "type": "vm" if is_vm else "physical",
                     "source": "override" if hk in override_names else "discovered",
-                    "covered_by_enterprise": covered})
+                    "covered_by_enterprise": covered,
+                    "status": "covered" if covered else "needs_license",
+                    "reason": "Covered by Enterprise physical host" if covered else ("Physical host" if not is_vm else "VM needs own SQL license"),
+                    "hypervisor_host": inst.get("hypervisor_host", "")})
 
             packs = math.ceil(total_cores / 2)
             entitled = await conn.fetchval("""

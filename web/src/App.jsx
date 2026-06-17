@@ -211,50 +211,105 @@ function Dashboard() {
           {expandedComp && (() => {
             const g = compliance.find(c => c.product === expandedComp);
             if (!g || !g.host_details || g.host_details.length === 0) return null;
-            const details = [...g.host_details].sort((a,b) => b.licensed_cores - a.licensed_cores);
+            const allDetails = [...g.host_details];
+            const needsLicense = allDetails.filter(h => h.status === 'needs_license');
+            const covered = allDetails.filter(h => h.status === 'covered');
             return (
               <div className="card" style={{marginTop:'0.75rem',padding:'1rem'}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.75rem'}}>
-                  <h3 style={{margin:0,fontSize:'0.95rem'}}>{expandedComp} — Host Breakdown ({details.length} hosts)</h3>
+                  <div>
+                    <h3 style={{margin:0,fontSize:'0.95rem'}}>{expandedComp} — Host Breakdown</h3>
+                    <div style={{fontSize:'0.8rem',color:'var(--text-secondary)',marginTop:'0.25rem'}}>
+                      <span style={{color:'var(--danger)',fontWeight:600}}>{needsLicense.length} need license</span>
+                      {' · '}
+                      <span style={{color:'var(--success)',fontWeight:600}}>{covered.length} covered</span>
+                      {' · '}
+                      {allDetails.length} total
+                    </div>
+                  </div>
                   <button className="btn-sm" onClick={() => setExpandedComp(null)}>Close</button>
                 </div>
-                <div style={{maxHeight:'400px',overflow:'auto'}}>
-                  <table className="data-table" style={{fontSize:'0.82rem'}}>
-                    <thead>
-                      <tr>
-                        <th>Hostname</th>
-                        <th>Type</th>
-                        <th>Sockets</th>
-                        <th>Physical Cores</th>
-                        <th>Licensed Cores</th>
-                        <th>2-Core Packs</th>
-                        {g.product.includes('SQL') && <th>Source</th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {details.map((h, i) => (
-                        <tr key={i} style={h.licensed_cores > 0 ? {} : {opacity:0.5}}>
-                          <td><strong>{h.hostname}</strong></td>
-                          <td><Badge color={h.type === 'physical' ? 'blue' : 'purple'}>{h.type}</Badge></td>
-                          <td>{h.sockets}</td>
-                          <td>{h.physical_cores}</td>
-                          <td style={{fontWeight:600}}>{h.licensed_cores}</td>
-                          <td>{h.two_core_packs}</td>
-                          {g.product.includes('SQL') && <td>{h.covered_by_enterprise ? <Badge color="green">Covered by Ent</Badge> : h.source || '—'}</td>}
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>
-                        <td>Total</td><td></td><td></td>
-                        <td>{details.reduce((s,h) => s + h.physical_cores, 0)}</td>
-                        <td>{details.reduce((s,h) => s + h.licensed_cores, 0)}</td>
-                        <td>{details.reduce((s,h) => s + h.two_core_packs, 0)}</td>
-                        {g.product.includes('SQL') && <td></td>}
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
+
+                {/* Needs License section */}
+                {needsLicense.length > 0 && (
+                  <div style={{marginBottom:'1.25rem'}}>
+                    <h4 style={{fontSize:'0.85rem',color:'var(--danger)',margin:'0 0 0.5rem',display:'flex',alignItems:'center',gap:'0.4rem'}}>
+                      Needs License ({needsLicense.length})
+                    </h4>
+                    <div style={{maxHeight:'350px',overflow:'auto'}}>
+                      <table className="data-table" style={{fontSize:'0.82rem'}}>
+                        <thead>
+                          <tr>
+                            <th>Hostname</th>
+                            <th>Type</th>
+                            <th>Hypervisor</th>
+                            <th>Sockets</th>
+                            <th>Cores</th>
+                            <th>Licensed Cores</th>
+                            <th>2-Core Packs</th>
+                            <th>Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {needsLicense.sort((a,b) => b.licensed_cores - a.licensed_cores).map((h, i) => (
+                            <tr key={i} style={{background:'#fef2f2'}}>
+                              <td><strong>{h.hostname}</strong></td>
+                              <td><Badge color={h.type === 'physical' ? 'blue' : 'purple'}>{h.type}</Badge></td>
+                              <td style={{fontSize:'0.78rem',color:'var(--text-secondary)'}}>{h.hypervisor_host || '—'}</td>
+                              <td>{h.sockets}</td>
+                              <td>{h.physical_cores}</td>
+                              <td style={{fontWeight:600,color:'var(--danger)'}}>{h.licensed_cores}</td>
+                              <td style={{fontWeight:600}}>{h.two_core_packs}</td>
+                              <td style={{fontSize:'0.78rem',color:'var(--text-secondary)'}}>{h.reason || ''}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                            <td>Total</td><td></td><td></td><td></td>
+                            <td>{needsLicense.reduce((s,h) => s + h.physical_cores, 0)}</td>
+                            <td style={{color:'var(--danger)'}}>{needsLicense.reduce((s,h) => s + h.licensed_cores, 0)}</td>
+                            <td>{needsLicense.reduce((s,h) => s + h.two_core_packs, 0)}</td>
+                            <td></td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Covered section */}
+                {covered.length > 0 && (
+                  <div>
+                    <h4 style={{fontSize:'0.85rem',color:'var(--success)',margin:'0 0 0.5rem',display:'flex',alignItems:'center',gap:'0.4rem'}}>
+                      Covered ({covered.length})
+                    </h4>
+                    <div style={{maxHeight:'250px',overflow:'auto'}}>
+                      <table className="data-table" style={{fontSize:'0.82rem'}}>
+                        <thead>
+                          <tr>
+                            <th>Hostname</th>
+                            <th>Type</th>
+                            <th>Hypervisor</th>
+                            <th>Cores</th>
+                            <th>Covered By</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {covered.sort((a,b) => (a.hostname||'').localeCompare(b.hostname||'')).map((h, i) => (
+                            <tr key={i}>
+                              <td>{h.hostname}</td>
+                              <td><Badge color="purple">vm</Badge></td>
+                              <td style={{fontSize:'0.78rem'}}>{h.hypervisor_host || '—'}</td>
+                              <td>{h.physical_cores}</td>
+                              <td style={{fontSize:'0.78rem',color:'var(--success)'}}>{h.reason || 'Covered'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })()}
