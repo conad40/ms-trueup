@@ -116,6 +116,7 @@ function Dashboard() {
   const { data, loading } = useFetch('/dashboard');
   const comp = useFetch('/compliance');
   const scans = useFetch('/scans?limit=30');
+  const [expandedComp, setExpandedComp] = useState(null);
   if (loading || !data) return <Spinner />;
   const cards = [
     { label: 'Physical Hosts', value: data.physical_hosts, color: '#0891b2' },
@@ -174,8 +175,10 @@ function Dashboard() {
             {compliance.map(g => {
               const pct = g.entitled_cores > 0 ? Math.min(100, Math.round((g.entitled_cores / Math.max(g.required_cores,1)) * 100)) : 0;
               const color = g.compliant ? 'var(--success)' : 'var(--danger)';
+              const isOpen = expandedComp === g.product;
               return (
-                <div key={g.product} className="stat-card" style={{borderLeftColor: color, padding:'1.25rem'}}>
+                <div key={g.product} className="stat-card" style={{borderLeftColor: color, padding:'1.25rem', cursor:'pointer'}}
+                  onClick={() => setExpandedComp(isOpen ? null : g.product)}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.65rem'}}>
                     <strong style={{fontSize:'0.95rem'}}>{g.product}</strong>
                     <Badge color={g.compliant ? 'green' : 'red'}>{g.compliant ? 'Compliant' : 'Gap'}</Badge>
@@ -196,10 +199,65 @@ function Dashboard() {
                     {g.physical_hosts} physical · {g.virtual_hosts} VMs
                     {g.note ? ` · ${g.note}` : ''}
                   </div>
+                  <div style={{fontSize:'0.75rem',color:'var(--primary)',marginTop:'0.35rem'}}>
+                    {isOpen ? '▾ Hide host details' : '▸ Click to see hosts'}
+                  </div>
                 </div>
               );
             })}
           </div>
+
+          {/* Host detail table for expanded compliance card */}
+          {expandedComp && (() => {
+            const g = compliance.find(c => c.product === expandedComp);
+            if (!g || !g.host_details || g.host_details.length === 0) return null;
+            const details = [...g.host_details].sort((a,b) => b.licensed_cores - a.licensed_cores);
+            return (
+              <div className="card" style={{marginTop:'0.75rem',padding:'1rem'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.75rem'}}>
+                  <h3 style={{margin:0,fontSize:'0.95rem'}}>{expandedComp} — Host Breakdown ({details.length} hosts)</h3>
+                  <button className="btn-sm" onClick={() => setExpandedComp(null)}>Close</button>
+                </div>
+                <div style={{maxHeight:'400px',overflow:'auto'}}>
+                  <table className="data-table" style={{fontSize:'0.82rem'}}>
+                    <thead>
+                      <tr>
+                        <th>Hostname</th>
+                        <th>Type</th>
+                        <th>Sockets</th>
+                        <th>Physical Cores</th>
+                        <th>Licensed Cores</th>
+                        <th>2-Core Packs</th>
+                        {g.product.includes('SQL') && <th>Source</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {details.map((h, i) => (
+                        <tr key={i} style={h.licensed_cores > 0 ? {} : {opacity:0.5}}>
+                          <td><strong>{h.hostname}</strong></td>
+                          <td><Badge color={h.type === 'physical' ? 'blue' : 'purple'}>{h.type}</Badge></td>
+                          <td>{h.sockets}</td>
+                          <td>{h.physical_cores}</td>
+                          <td style={{fontWeight:600}}>{h.licensed_cores}</td>
+                          <td>{h.two_core_packs}</td>
+                          {g.product.includes('SQL') && <td>{h.covered_by_enterprise ? <Badge color="green">Covered by Ent</Badge> : h.source || '—'}</td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                        <td>Total</td><td></td><td></td>
+                        <td>{details.reduce((s,h) => s + h.physical_cores, 0)}</td>
+                        <td>{details.reduce((s,h) => s + h.licensed_cores, 0)}</td>
+                        <td>{details.reduce((s,h) => s + h.two_core_packs, 0)}</td>
+                        {g.product.includes('SQL') && <td></td>}
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
