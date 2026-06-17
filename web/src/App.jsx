@@ -557,6 +557,7 @@ function Hosts() {
       case 'type': av = a.is_virtual ? 1 : 0; bv = b.is_virtual ? 1 : 0; break;
       case 'cpu_sockets': av = a.cpu_sockets||0; bv = b.cpu_sockets||0; break;
       case 'cpu_cores': av = a.cpu_cores||0; bv = b.cpu_cores||0; break;
+      case 'cpu_model': av = a.is_virtual ? 'Virtual' : (a.cpu_model||'').toLowerCase(); bv = b.is_virtual ? 'Virtual' : (b.cpu_model||'').toLowerCase(); break;
       case 'scan_source': av = (a.scan_source||''); bv = (b.scan_source||''); break;
       case 'last_scan': av = a.last_scan||''; bv = b.last_scan||''; break;
       default: av = ''; bv = '';
@@ -638,6 +639,7 @@ function Hosts() {
                 <th style={{cursor:'pointer'}} onClick={() => toggleSort('type')}>Type<SortIcon col="type" /></th>
                 <th style={{cursor:'pointer'}} onClick={() => toggleSort('cpu_sockets')}>Sockets<SortIcon col="cpu_sockets" /></th>
                 <th style={{cursor:'pointer'}} onClick={() => toggleSort('cpu_cores')}>Cores<SortIcon col="cpu_cores" /></th>
+                <th style={{cursor:'pointer'}} onClick={() => toggleSort('cpu_model')}>Processor<SortIcon col="cpu_model" /></th>
                 <th style={{cursor:'pointer'}} onClick={() => toggleSort('scan_source')}>Source<SortIcon col="scan_source" /></th>
                 <th>WS License</th><th>SQL License</th>
                 <th style={{cursor:'pointer'}} onClick={() => toggleSort('last_scan')}>Last Scan<SortIcon col="last_scan" /></th>
@@ -653,6 +655,7 @@ function Hosts() {
                   <td><Badge color={h.is_virtual ? 'blue' : 'gray'}>{h.is_virtual ? 'VM' : 'Physical'}</Badge></td>
                   <td>{h.cpu_sockets}</td>
                   <td>{h.cpu_cores}</td>
+                  <td style={{fontSize:'0.78rem',maxWidth:'180px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={h.cpu_model||''}>{h.is_virtual ? 'Virtual' : (h.cpu_model || '—')}</td>
                   <td><Badge color="purple">{h.scan_source}</Badge></td>
                   <td>
                     <select value={h.license_override || ''} onChange={e => setLicense(h.id, 'license_override', e.target.value)}>
