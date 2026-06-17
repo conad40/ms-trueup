@@ -212,14 +212,27 @@ function Dashboard() {
             const g = compliance.find(c => c.product === expandedComp);
             if (!g || !g.host_details || g.host_details.length === 0) return null;
             const allDetails = [...g.host_details];
+            const physicals = allDetails.filter(h => h.type === 'physical');
             const needsLicense = allDetails.filter(h => h.status === 'needs_license');
             const covered = allDetails.filter(h => h.status === 'covered');
+            const hypSummary = g.hyp_summary || [];
+            const isStandard = expandedComp.includes('Standard');
+
+            // Group VMs by hypervisor for Standard view
+            const vmsByHyp = {};
+            allDetails.filter(h => h.type === 'vm').forEach(h => {
+              const key = h.hypervisor_host || h.stacking_group || 'Unknown';
+              (vmsByHyp[key] = vmsByHyp[key] || []).push(h);
+            });
+
             return (
               <div className="card" style={{marginTop:'0.75rem',padding:'1rem'}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.75rem'}}>
                   <div>
                     <h3 style={{margin:0,fontSize:'0.95rem'}}>{expandedComp} — Host Breakdown</h3>
                     <div style={{fontSize:'0.8rem',color:'var(--text-secondary)',marginTop:'0.25rem'}}>
+                      <span style={{fontWeight:600}}>{physicals.length} physical</span>
+                      {' · '}
                       <span style={{color:'var(--danger)',fontWeight:600}}>{needsLicense.length} need license</span>
                       {' · '}
                       <span style={{color:'var(--success)',fontWeight:600}}>{covered.length} covered</span>
@@ -230,47 +243,69 @@ function Dashboard() {
                   <button className="btn-sm" onClick={() => setExpandedComp(null)}>Close</button>
                 </div>
 
-                {/* Needs License section */}
-                {needsLicense.length > 0 && (
-                  <div style={{marginBottom:'1.25rem'}}>
-                    <h4 style={{fontSize:'0.85rem',color:'var(--danger)',margin:'0 0 0.5rem',display:'flex',alignItems:'center',gap:'0.4rem'}}>
-                      Needs License ({needsLicense.length})
-                    </h4>
-                    <div style={{maxHeight:'350px',overflow:'auto'}}>
-                      <table className="data-table" style={{fontSize:'0.82rem'}}>
-                        <thead>
-                          <tr>
-                            <th>Hostname</th>
-                            <th>Type</th>
-                            <th>Hypervisor</th>
-                            <th>Sockets</th>
-                            <th>Cores</th>
-                            <th>Licensed Cores</th>
-                            <th>2-Core Packs</th>
-                            <th>Reason</th>
+                {/* Stacking summary for Standard */}
+                {isStandard && hypSummary.length > 0 && (
+                  <div style={{marginBottom:'1rem'}}>
+                    <h4 style={{fontSize:'0.85rem',margin:'0 0 0.5rem'}}>Stacking Summary by Hypervisor</h4>
+                    <table className="data-table" style={{fontSize:'0.82rem'}}>
+                      <thead>
+                        <tr><th>Hypervisor Host</th><th>VMs</th><th>Licenses Needed</th><th>Base</th><th>Stacked</th><th>Extra Cores</th></tr>
+                      </thead>
+                      <tbody>
+                        {hypSummary.sort((a,b) => b.vm_count - a.vm_count).map((hs, i) => (
+                          <tr key={i} style={hs.extra_stacked > 0 ? {background:'#fffbeb'} : {}}>
+                            <td><strong>{hs.hypervisor}</strong></td>
+                            <td>{hs.vm_count}</td>
+                            <td style={{fontWeight:600}}>{hs.licenses_needed}</td>
+                            <td>1</td>
+                            <td style={{fontWeight:600,color: hs.extra_stacked > 0 ? '#d97706' : 'var(--text-secondary)'}}>
+                              {hs.extra_stacked > 0 ? `+${hs.extra_stacked}` : '0'}
+                            </td>
+                            <td>{hs.extra_cores > 0 ? `+${hs.extra_cores}` : '0'}</td>
                           </tr>
-                        </thead>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                          <td>Total</td>
+                          <td>{hypSummary.reduce((s,h) => s + h.vm_count, 0)}</td>
+                          <td>{hypSummary.reduce((s,h) => s + h.licenses_needed, 0)}</td>
+                          <td>{hypSummary.length}</td>
+                          <td style={{color:'#d97706'}}>+{hypSummary.reduce((s,h) => s + h.extra_stacked, 0)}</td>
+                          <td>+{hypSummary.reduce((s,h) => s + h.extra_cores, 0)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                    <div style={{fontSize:'0.78rem',color:'var(--text-secondary)',marginTop:'0.4rem',lineHeight:1.5}}>
+                      Each Standard license covers 2 VMs on a host. Hosts with &gt;2 VMs need stacked licenses (each additional license = 2 more VMs = 16 cores).
+                    </div>
+                  </div>
+                )}
+
+                {/* Physical hosts */}
+                {physicals.length > 0 && (
+                  <div style={{marginBottom:'1rem'}}>
+                    <h4 style={{fontSize:'0.85rem',margin:'0 0 0.5rem'}}>Physical Hosts ({physicals.length})</h4>
+                    <div style={{maxHeight:'300px',overflow:'auto'}}>
+                      <table className="data-table" style={{fontSize:'0.82rem'}}>
+                        <thead><tr><th>Hostname</th><th>Sockets</th><th>Cores</th><th>Licensed Cores</th><th>2-Core Packs</th></tr></thead>
                         <tbody>
-                          {needsLicense.sort((a,b) => b.licensed_cores - a.licensed_cores).map((h, i) => (
-                            <tr key={i} style={{background:'#fef2f2'}}>
+                          {physicals.sort((a,b) => b.licensed_cores - a.licensed_cores).map((h,i) => (
+                            <tr key={i}>
                               <td><strong>{h.hostname}</strong></td>
-                              <td><Badge color={h.type === 'physical' ? 'blue' : 'purple'}>{h.type}</Badge></td>
-                              <td style={{fontSize:'0.78rem',color:'var(--text-secondary)'}}>{h.hypervisor_host || '—'}</td>
                               <td>{h.sockets}</td>
                               <td>{h.physical_cores}</td>
-                              <td style={{fontWeight:600,color:'var(--danger)'}}>{h.licensed_cores}</td>
-                              <td style={{fontWeight:600}}>{h.two_core_packs}</td>
-                              <td style={{fontSize:'0.78rem',color:'var(--text-secondary)'}}>{h.reason || ''}</td>
+                              <td style={{fontWeight:600}}>{h.licensed_cores}</td>
+                              <td>{h.two_core_packs}</td>
                             </tr>
                           ))}
                         </tbody>
                         <tfoot>
                           <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>
-                            <td>Total</td><td></td><td></td><td></td>
-                            <td>{needsLicense.reduce((s,h) => s + h.physical_cores, 0)}</td>
-                            <td style={{color:'var(--danger)'}}>{needsLicense.reduce((s,h) => s + h.licensed_cores, 0)}</td>
-                            <td>{needsLicense.reduce((s,h) => s + h.two_core_packs, 0)}</td>
-                            <td></td>
+                            <td>Total</td><td></td>
+                            <td>{physicals.reduce((s,h) => s + h.physical_cores, 0)}</td>
+                            <td>{physicals.reduce((s,h) => s + h.licensed_cores, 0)}</td>
+                            <td>{physicals.reduce((s,h) => s + h.two_core_packs, 0)}</td>
                           </tr>
                         </tfoot>
                       </table>
@@ -278,37 +313,95 @@ function Dashboard() {
                   </div>
                 )}
 
-                {/* Covered section */}
-                {covered.length > 0 && (
+                {/* VMs grouped by hypervisor for Standard, flat list otherwise */}
+                {isStandard && Object.keys(vmsByHyp).length > 0 ? (
                   <div>
-                    <h4 style={{fontSize:'0.85rem',color:'var(--success)',margin:'0 0 0.5rem',display:'flex',alignItems:'center',gap:'0.4rem'}}>
-                      Covered ({covered.length})
-                    </h4>
-                    <div style={{maxHeight:'250px',overflow:'auto'}}>
-                      <table className="data-table" style={{fontSize:'0.82rem'}}>
-                        <thead>
-                          <tr>
-                            <th>Hostname</th>
-                            <th>Type</th>
-                            <th>Hypervisor</th>
-                            <th>Cores</th>
-                            <th>Covered By</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {covered.sort((a,b) => (a.hostname||'').localeCompare(b.hostname||'')).map((h, i) => (
-                            <tr key={i}>
-                              <td>{h.hostname}</td>
-                              <td><Badge color="purple">vm</Badge></td>
-                              <td style={{fontSize:'0.78rem'}}>{h.hypervisor_host || '—'}</td>
-                              <td>{h.physical_cores}</td>
-                              <td style={{fontSize:'0.78rem',color:'var(--success)'}}>{h.reason || 'Covered'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                    <h4 style={{fontSize:'0.85rem',margin:'0 0 0.5rem'}}>VMs by Hypervisor</h4>
+                    {Object.entries(vmsByHyp).sort((a,b) => b[1].length - a[1].length).map(([hyp, vms]) => {
+                      const licCount = Math.ceil(vms.length / 2);
+                      const needsStack = licCount > 1;
+                      return (
+                        <div key={hyp} style={{marginBottom:'0.75rem',border:'1px solid var(--border)',borderRadius:'var(--radius)'}}>
+                          <div style={{padding:'0.5rem 0.75rem',background: needsStack ? '#fffbeb' : '#f0fdf4',
+                            display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:'0.82rem',borderBottom:'1px solid var(--border)'}}>
+                            <span><strong>{hyp}</strong> — {vms.length} VMs</span>
+                            <span style={{fontWeight:600,color: needsStack ? '#d97706' : 'var(--success)'}}>
+                              {licCount} license{licCount > 1 ? 's' : ''} needed
+                              {needsStack ? ` (1 base + ${licCount-1} stacked)` : ' (base only)'}
+                            </span>
+                          </div>
+                          <table className="data-table" style={{fontSize:'0.8rem',margin:0,borderRadius:0}}>
+                            <tbody>
+                              {vms.map((h,i) => {
+                                const licNum = h.license_num || Math.ceil((i+1)/2);
+                                return (
+                                  <tr key={i} style={{background: h.status === 'covered' ? '' : '#fef2f2'}}>
+                                    <td style={{width:'40%'}}>{h.hostname}</td>
+                                    <td>
+                                      <Badge color={h.status === 'covered' ? 'green' : 'yellow'}>
+                                        {h.status === 'covered' ? 'covered' : 'stacked'}
+                                      </Badge>
+                                    </td>
+                                    <td style={{fontSize:'0.78rem',color:'var(--text-secondary)'}}>
+                                      License {licNum}{licNum === 1 ? ' (base)' : ` (stack #${licNum-1})`}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })}
                   </div>
+                ) : (
+                  /* Non-standard: flat needs/covered lists */
+                  <>
+                    {needsLicense.filter(h => h.type === 'vm').length > 0 && (
+                      <div style={{marginBottom:'1rem'}}>
+                        <h4 style={{fontSize:'0.85rem',color:'var(--danger)',margin:'0 0 0.5rem'}}>
+                          VMs Needing License ({needsLicense.filter(h => h.type === 'vm').length})
+                        </h4>
+                        <div style={{maxHeight:'300px',overflow:'auto'}}>
+                          <table className="data-table" style={{fontSize:'0.82rem'}}>
+                            <thead><tr><th>Hostname</th><th>Hypervisor</th><th>Cores</th><th>Reason</th></tr></thead>
+                            <tbody>
+                              {needsLicense.filter(h => h.type === 'vm').map((h,i) => (
+                                <tr key={i} style={{background:'#fef2f2'}}>
+                                  <td><strong>{h.hostname}</strong></td>
+                                  <td style={{fontSize:'0.78rem'}}>{h.hypervisor_host || '—'}</td>
+                                  <td>{h.physical_cores}</td>
+                                  <td style={{fontSize:'0.78rem',color:'var(--text-secondary)'}}>{h.reason}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                    {covered.length > 0 && (
+                      <div>
+                        <h4 style={{fontSize:'0.85rem',color:'var(--success)',margin:'0 0 0.5rem'}}>
+                          Covered VMs ({covered.length})
+                        </h4>
+                        <div style={{maxHeight:'250px',overflow:'auto'}}>
+                          <table className="data-table" style={{fontSize:'0.82rem'}}>
+                            <thead><tr><th>Hostname</th><th>Hypervisor</th><th>Cores</th><th>Covered By</th></tr></thead>
+                            <tbody>
+                              {covered.sort((a,b) => (a.hostname||'').localeCompare(b.hostname||'')).map((h,i) => (
+                                <tr key={i}>
+                                  <td>{h.hostname}</td>
+                                  <td style={{fontSize:'0.78rem'}}>{h.hypervisor_host || '—'}</td>
+                                  <td>{h.physical_cores}</td>
+                                  <td style={{fontSize:'0.78rem',color:'var(--success)'}}>{h.reason}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             );

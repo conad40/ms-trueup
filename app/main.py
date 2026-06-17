@@ -596,13 +596,13 @@ async def compliance_report():
             else:
                 all_vms.append(h)
 
-        # Classify VMs
+        # Classify VMs — track ALL VMs per hypervisor for stacking math
         covered_dc_count = 0
         covered_dc_vms = []
-        covered_std_vms = []
-        std_vms_per_host = {}
+        std_vms_by_hyp = {}       # hyp_key → [vm, vm, ...]
         uncovered_by_ed = {}
-        excluded_vms = []  # license_override = None/Vendor
+        excluded_vms = []
+        orphan_vms = []           # VMs with no known hypervisor host
         for vm in all_vms:
             if vm.get("license_override") in ("None", "Vendor"):
                 excluded_vms.append(vm)
@@ -614,21 +614,27 @@ async def compliance_report():
                 covered_dc_vms.append(vm)
             elif hyp_short in std_hostnames or hyp in std_hostnames:
                 key = hyp_short or hyp
-                std_vms_per_host.setdefault(key, 0)
-                std_vms_per_host[key] += 1
-                if std_vms_per_host[key] > 2:
-                    ed = _eff_edition(vm)
-                    uncovered_by_ed.setdefault(ed, []).append(vm)
-                else:
-                    covered_std_vms.append(vm)
+                std_vms_by_hyp.setdefault(key, []).append(vm)
+            elif hyp:
+                # VM on a host we don't recognize as physical — needs its own license
+                ed = _eff_edition(vm)
+                uncovered_by_ed.setdefault(ed, []).append(vm)
             else:
+                orphan_vms.append(vm)
                 ed = _eff_edition(vm)
                 uncovered_by_ed.setdefault(ed, []).append(vm)
 
         all_editions = set(physical_by_ed.keys()) | set(uncovered_by_ed.keys())
+        # Also include Standard if we have std VMs
+        if std_vms_by_hyp:
+            all_editions.add("Standard")
+
         for edition in sorted(all_editions):
             total_cores = 0
             host_details = []
+            hyp_summary = []  # per-hypervisor stacking breakdown
+
+            # Physical hosts
             for h in physical_by_ed.get(edition, []):
                 sockets = h["cpu_sockets"] or 1
                 cores = h["cpu_cores"] or 0
@@ -638,22 +644,41 @@ async def compliance_report():
                 host_details.append({"hostname": h["hostname"], "sockets": sockets,
                     "physical_cores": cores, "licensed_cores": hc,
                     "two_core_packs": math.ceil(hc / 2), "type": "physical",
-                    "status": "needs_license", "reason": "Physical host requires own license"})
+                    "status": "needs_license", "reason": "Physical host — 1 base license required"})
 
-            uncovered = uncovered_by_ed.get(edition, [])
-            if edition != "Datacenter" and uncovered:
-                extra = math.ceil(len(uncovered) / 2) * 16
-                total_cores += extra
+            # Standard stacking: group VMs by hypervisor
+            if edition == "Standard":
+                for hyp_key, vms in sorted(std_vms_by_hyp.items()):
+                    vm_count = len(vms)
+                    licenses_needed = math.ceil(vm_count / 2)  # each license covers 2 VMs
+                    extra_licenses = max(0, licenses_needed - 1)  # minus the 1 base license already counted above
+                    extra_cores = extra_licenses * 16
+                    total_cores += extra_cores
 
-            for vm in uncovered:
-                hyp = vm.get("hypervisor_host") or "Unknown"
-                host_details.append({"hostname": vm["hostname"], "sockets": vm["cpu_sockets"] or 1,
-                    "physical_cores": vm["cpu_cores"] or 0, "licensed_cores": 16,
-                    "two_core_packs": 8, "type": "vm",
-                    "status": "needs_license", "reason": f"VM not covered (host: {hyp})",
-                    "hypervisor_host": hyp})
+                    hyp_summary.append({
+                        "hypervisor": hyp_key, "vm_count": vm_count,
+                        "licenses_needed": licenses_needed,
+                        "base_included": 1, "extra_stacked": extra_licenses,
+                        "extra_cores": extra_cores
+                    })
 
-            # Add covered VMs so user can see the full picture
+                    for i, vm in enumerate(vms):
+                        slot = i + 1
+                        license_num = math.ceil(slot / 2)
+                        is_covered = license_num <= 1  # first 2 VMs covered by base license
+                        host_details.append({
+                            "hostname": vm["hostname"], "sockets": vm["cpu_sockets"] or 1,
+                            "physical_cores": vm["cpu_cores"] or 0,
+                            "licensed_cores": 0 if is_covered else 0,
+                            "two_core_packs": 0, "type": "vm",
+                            "status": "covered" if is_covered else "needs_license",
+                            "reason": f"VM {slot}/{vm_count} on {hyp_key} — license {license_num} of {licenses_needed}" + (" (base)" if license_num == 1 else " (stacked)"),
+                            "hypervisor_host": hyp_key,
+                            "license_num": license_num,
+                            "stacking_group": hyp_key
+                        })
+
+            # Datacenter covered VMs
             if edition == "Datacenter":
                 for vm in covered_dc_vms:
                     host_details.append({"hostname": vm["hostname"], "sockets": vm["cpu_sockets"] or 1,
@@ -661,13 +686,19 @@ async def compliance_report():
                         "two_core_packs": 0, "type": "vm",
                         "status": "covered", "reason": f"Covered by DC host ({vm.get('hypervisor_host','')})",
                         "hypervisor_host": vm.get("hypervisor_host", "")})
-            elif edition == "Standard":
-                for vm in covered_std_vms:
-                    host_details.append({"hostname": vm["hostname"], "sockets": vm["cpu_sockets"] or 1,
-                        "physical_cores": vm["cpu_cores"] or 0, "licensed_cores": 0,
-                        "two_core_packs": 0, "type": "vm",
-                        "status": "covered", "reason": f"Covered by Std host ({vm.get('hypervisor_host','')}), 2 VM allowance",
-                        "hypervisor_host": vm.get("hypervisor_host", "")})
+
+            # Orphan/unknown VMs needing license
+            uncovered = uncovered_by_ed.get(edition, [])
+            if edition != "Datacenter" and uncovered:
+                extra = math.ceil(len(uncovered) / 2) * 16
+                total_cores += extra
+            for vm in uncovered:
+                hyp = vm.get("hypervisor_host") or "Unknown"
+                host_details.append({"hostname": vm["hostname"], "sockets": vm["cpu_sockets"] or 1,
+                    "physical_cores": vm["cpu_cores"] or 0, "licensed_cores": 16,
+                    "two_core_packs": 8, "type": "vm",
+                    "status": "needs_license", "reason": f"VM on unknown host ({hyp}) — needs own license",
+                    "hypervisor_host": hyp})
 
             packs = math.ceil(total_cores / 2)
             entitled = await conn.fetchval("""
@@ -680,21 +711,25 @@ async def compliance_report():
             """, edition)
 
             note = ""
+            total_std_vms = sum(len(v) for v in std_vms_by_hyp.values()) if edition == "Standard" else 0
             if edition == "Datacenter":
                 note = f"Covers unlimited VMs ({covered_dc_count} covered)"
+            elif edition == "Standard" and std_vms_by_hyp:
+                total_stacked = sum(max(0, math.ceil(len(v)/2) - 1) for v in std_vms_by_hyp.values())
+                note = f"{total_std_vms} VMs across {len(std_vms_by_hyp)} hosts · {len(physical_by_ed.get(edition,[]))} base + {total_stacked} stacked licenses"
             elif uncovered:
-                covered_std = sum(min(c, 2) for c in std_vms_per_host.values())
-                note = f"2 VMs per host ({covered_std} covered); {len(uncovered)} need additional licenses"
+                note = f"{len(uncovered)} VMs need additional licenses"
 
             gaps.append({
                 "product": f"Windows Server {edition}", "license_type": "core",
                 "physical_hosts": len(physical_by_ed.get(edition, [])),
-                "virtual_hosts": len(uncovered) if edition != "Datacenter" else covered_dc_count,
+                "virtual_hosts": total_std_vms if edition == "Standard" else (covered_dc_count if edition == "Datacenter" else len(uncovered)),
                 "required_cores": total_cores, "required_2packs": packs,
                 "entitled_cores": entitled, "entitled_2packs": entitled // 2 if entitled else 0,
                 "gap_cores": max(0, total_cores - entitled),
                 "gap_2packs": max(0, packs - (entitled // 2 if entitled else 0)),
                 "compliant": entitled >= total_cores, "host_details": host_details, "note": note,
+                "hyp_summary": hyp_summary if edition == "Standard" else [],
             })
 
         # ── SQL Server ──
