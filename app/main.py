@@ -147,7 +147,7 @@ async def upsert_host(conn, data: dict, scan_source: str = "winrm") -> int:
     existing_prio = SOURCE_PRIORITY.get((existing["scan_source"] or "") if existing else "", 0)
     is_higher = new_prio >= existing_prio
 
-    return await conn.fetchval("""
+    host_id = await conn.fetchval("""
         INSERT INTO hosts (hostname, ip_address, domain, os_name, os_version, os_edition,
             is_virtual, hypervisor_host, cpu_sockets, cpu_cores, cpu_logical, ram_gb,
             cpu_model, last_scan, scan_source)
@@ -188,6 +188,18 @@ async def upsert_host(conn, data: dict, scan_source: str = "winrm") -> int:
         _safe_int(data.get("cpu_sockets")), _safe_int(data.get("cpu_cores")),
         _safe_int(data.get("cpu_logical")), _safe_float(data.get("ram_gb")),
         data.get("cpu_model"), scan_source, is_higher)
+
+    # Datastore + power state (only vCenter provides these) — set when supplied; never null out
+    ds = (data.get("datastore") or "").strip()
+    ps = (data.get("power_state") or "").strip()
+    if ds and ps:
+        await conn.execute("UPDATE hosts SET datastore=$1, power_state=$2 WHERE id=$3", ds, ps, host_id)
+    elif ds:
+        await conn.execute("UPDATE hosts SET datastore=$1 WHERE id=$2", ds, host_id)
+    elif ps:
+        await conn.execute("UPDATE hosts SET power_state=$1 WHERE id=$2", ps, host_id)
+
+    return host_id
 
 
 async def upsert_sql_instance(conn, host_id: int, data: dict):
@@ -1365,13 +1377,35 @@ async def import_esxi_vms():
     """Add any active vCenter/ESXi VMs that aren't already in the tracker."""
     async with pool.acquire() as conn:
         added = await conn.fetch("""
-            INSERT INTO migration_tracking (vm_name)
-            SELECT hostname FROM hosts
+            INSERT INTO migration_tracking (vm_name, datastore, power_state)
+            SELECT hostname, datastore, power_state FROM hosts
             WHERE status='active' AND is_virtual=TRUE AND scan_source='vcenter'
             ON CONFLICT (vm_name) DO NOTHING
             RETURNING id
         """)
     return {"status": "ok", "added": len(added)}
+
+@app.post("/api/migrations/pull-datastores")
+async def pull_datastores():
+    """Backfill datastore + power state on tracked VMs from the latest host inventory.
+    Only fills blanks so manual edits are preserved."""
+    async with pool.acquire() as conn:
+        updated = await conn.fetch("""
+            UPDATE migration_tracking m
+            SET datastore = CASE WHEN (m.datastore IS NULL OR m.datastore = '')
+                                  AND h.datastore IS NOT NULL AND h.datastore <> ''
+                                 THEN h.datastore ELSE m.datastore END,
+                power_state = CASE WHEN (m.power_state IS NULL OR m.power_state = '')
+                                    AND h.power_state IS NOT NULL AND h.power_state <> ''
+                                   THEN h.power_state ELSE m.power_state END,
+                updated_at = NOW()
+            FROM hosts h
+            WHERE UPPER(h.hostname) = UPPER(m.vm_name)
+              AND ( ((m.datastore IS NULL OR m.datastore = '') AND h.datastore IS NOT NULL AND h.datastore <> '')
+                 OR ((m.power_state IS NULL OR m.power_state = '') AND h.power_state IS NOT NULL AND h.power_state <> '') )
+            RETURNING m.id
+        """)
+    return {"status": "ok", "updated": len(updated)}
 
 
 # ─── Excel Export ───

@@ -1014,6 +1014,14 @@ function Migration() {
     alert(`Imported ${r.added} VM(s) from vCenter inventory.`);
     reload();
   };
+  const pullDatastores = async () => {
+    setBusy(true);
+    const res = await fetch(`${API}/migrations/pull-datastores`, { method: 'POST' });
+    setBusy(false);
+    const r = await res.json().catch(() => ({ updated: 0 }));
+    alert(`Filled datastore / power on ${r.updated} VM(s) from the latest inventory.`);
+    reload();
+  };
   const remove = async (id, name) => {
     if (!confirm(`Remove ${name} from the tracker?`)) return;
     await fetch(`${API}/migrations/${id}`, { method: 'DELETE' });
@@ -1049,7 +1057,7 @@ function Migration() {
     else { setMigCol(col); setMigDir('asc'); }
     setMigPage(1);
   };
-  const colCount = (showVerified ? 15 : 14) + 1; // +1 for the selection column
+  const colCount = (showVerified ? 12 : 11) + 1; // +1 for the selection column
   const pageSize = 100;
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
   const curPage = Math.min(migPage, totalPages);
@@ -1077,6 +1085,7 @@ function Migration() {
             </>
           )}
           <button className="btn btn-secondary" onClick={() => reload()} title="Re-check the tracker against the latest SCVMM inventory the collector has pushed">Refresh SCVMM</button>
+          <button className="btn btn-secondary" onClick={pullDatastores} disabled={busy} title="Fill Datastore + Power from the latest vCenter scan (blanks only)">Pull from vCenter</button>
           <button className="btn btn-secondary" onClick={importEsxi} disabled={busy}>Import ESXi VMs</button>
         </div>
       </div>
@@ -1118,7 +1127,7 @@ function Migration() {
               <Th col="app_support" label="App Support" /><Th col="move_daytime" label="Daytime" /><Th col="move_afterhours" label="Afterhours" />
               <Th col="scheduled_at" label="Scheduled" /><Th col="detected_scvmm" label="In SCVMM" /><Th col="migrated" label="Migrated" /><Th col="date_migrated" label="Date Migrated" />
               {showVerified && <Th col="verified_working" label="Verified" />}
-              <Th col="zprl_to_nrep" label="Zprl→Nrep" /><Th col="vpg_deleted" label="VPG Deleted" /><Th col="should_be_zprl" label="Should be zprl" /><th></th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -1129,7 +1138,12 @@ function Migration() {
                   <strong style={r.excluded ? {textDecoration:'line-through'} : {}}>{r.vm_name}</strong>
                   {r.excluded && <span style={{marginLeft:'0.3rem',fontSize:'0.7rem',color:'var(--text-muted)'}}>excluded</span>}
                 </td>
-                <td><input style={{width:'64px'}} defaultValue={r.power_state || ''} onBlur={e => { if (e.target.value !== (r.power_state || '')) patch(r.id, { power_state: e.target.value }); }} /></td>
+                <td style={{textAlign:'center'}} title={/on/i.test(r.power_state || '') ? 'Powered On' : 'Powered Off'}>
+                  <label className="toggle">
+                    <input type="checkbox" checked={/on/i.test(r.power_state || '')} onChange={e => patch(r.id, { power_state: e.target.checked ? 'PoweredOn' : 'PoweredOff' })} />
+                    <span className="slider" />
+                  </label>
+                </td>
                 <td><input style={{width:'96px'}} defaultValue={r.datastore || ''} onBlur={e => { if (e.target.value !== (r.datastore || '')) patch(r.id, { datastore: e.target.value }); }} /></td>
                 <td><input style={{width:'120px'}} placeholder="contact / notes" defaultValue={r.app_support || ''} onBlur={e => { if (e.target.value !== (r.app_support || '')) patch(r.id, { app_support: e.target.value }); }} /></td>
                 <td style={{textAlign:'center'}}><Check row={r} field="move_daytime" /></td>
@@ -1146,9 +1160,6 @@ function Migration() {
                 </td>
                 <td><input type="date" value={r.date_migrated ? r.date_migrated.substring(0, 10) : ''} onChange={e => patch(r.id, { date_migrated: e.target.value || null })} /></td>
                 {showVerified && <td style={{textAlign:'center'}}><Check row={r} field="verified_working" /></td>}
-                <td style={{textAlign:'center'}}><Check row={r} field="zprl_to_nrep" /></td>
-                <td style={{textAlign:'center'}}><Check row={r} field="vpg_deleted" /></td>
-                <td style={{textAlign:'center'}}><Check row={r} field="should_be_zprl" /></td>
                 <td><button className="btn-sm" onClick={() => remove(r.id, r.vm_name)}>✕</button></td>
               </tr>
             ))}

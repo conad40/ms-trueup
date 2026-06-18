@@ -76,6 +76,21 @@ def _scan_sync(host, user, password, port, verify_ssl):
             host_system = runtime.host
             hyp_name = host_system.name if host_system else ""
 
+            # Datastore name(s) the VM lives on — comma-separated, de-duped, when it spans several
+            ds_names = []
+            try:
+                for ds in (vm.datastore or []):
+                    if ds and getattr(ds, "name", None):
+                        ds_names.append(ds.name)
+            except Exception:
+                pass
+            datastore = ", ".join(sorted(set(ds_names))) if ds_names else None
+
+            # Power state → normalized PoweredOn / PoweredOff / Suspended
+            ps = str(runtime.powerState) if runtime and runtime.powerState else ""
+            power_state = {"poweredOn": "PoweredOn", "poweredOff": "PoweredOff",
+                           "suspended": "Suspended"}.get(ps, None)
+
             # For VMs: cpu_sockets=1 (not numCPU which is vCPU count)
             results["vms"].append({
                 "hostname": vm.name,
@@ -87,6 +102,8 @@ def _scan_sync(host, user, password, port, verify_ssl):
                 "is_virtual": True,
                 "hypervisor_host": hyp_name,
                 "ip_address": guest.ipAddress if guest else None,
+                "datastore": datastore,
+                "power_state": power_state,
             })
         except Exception as e:
             log.warning(f"Failed to read VM {vm.name}: {e}")
