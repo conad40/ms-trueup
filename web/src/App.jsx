@@ -475,6 +475,7 @@ function Hosts() {
   const [filterOS, setFilterOS] = useState('');
   const [sortCol, setSortCol] = useState('hostname');
   const [sortDir, setSortDir] = useState('asc');
+  const [showSummary, setShowSummary] = useState(true);
   const { data, loading, reload } = useFetch(`/hosts?page=1&per_page=10000`);
   const inactiveRes = useFetch('/hosts/inactive');
 
@@ -572,6 +573,51 @@ function Hosts() {
   const totalPages = Math.ceil(sorted.length / pageSize);
   const pagedHosts = sorted.slice((page - 1) * pageSize, page * pageSize);
 
+  // ── Physical-server license summary (all physical hosts, independent of table filters) ──
+  const physKey = (name) => (name || '').toUpperCase().split('.')[0];
+  const isWinServer = (os) => /server/i.test(os || '') && !/esxi/i.test(os || '');
+  // Count VMs per hypervisor (each VM once, keyed by hypervisor short name)
+  const vmByHost = {};
+  hosts.forEach(h => {
+    if (h.is_virtual && h.hypervisor_host) {
+      const k = physKey(h.hypervisor_host);
+      const e = vmByHost[k] || (vmByHost[k] = { total: 0, win: 0 });
+      e.total++;
+      if (isWinServer(h.os_name)) e.win++;
+    }
+  });
+  const edLabel = (h) => {
+    if (h.license_override) return h.license_override;
+    const a = h.license_assignment || '';
+    if (a.startsWith('Datacenter')) return 'Datacenter';
+    if (a.startsWith('Standard')) return 'Standard';
+    if (a.startsWith('No License')) return 'None';
+    if (a.startsWith('Vendor')) return 'Vendor';
+    return '—';
+  };
+  const physicalRows = hosts
+    .filter(h => !h.is_virtual && (
+      isWinServer(h.os_name) ||
+      (h.license_override && !['', 'None', 'Vendor'].includes(h.license_override)) ||
+      (vmByHost[physKey(h.hostname)]?.total > 0)
+    ))
+    .map(h => {
+      const vc = vmByHost[physKey(h.hostname)] || { total: 0, win: 0 };
+      const lc = h.licensed_cores || 0;
+      return { ...h, _lc: lc, _packs: Math.ceil(lc / 2), _winVms: vc.win, _totVms: vc.total };
+    })
+    .sort((a, b) => (b._lc - a._lc) || (b._totVms - a._totVms) || (a.hostname || '').localeCompare(b.hostname || ''));
+  const coresByEd = {};
+  physicalRows.forEach(h => { const e = edLabel(h); coresByEd[e] = (coresByEd[e] || 0) + h._lc; });
+  const edSummary = Object.entries(coresByEd)
+    .filter(([k, c]) => c > 0 && k !== '—' && k !== 'None' && k !== 'Vendor')
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, c]) => `${k}: ${c}c (${Math.ceil(c / 2)} packs)`).join('   ·   ');
+  const physTotals = physicalRows.reduce((t, h) => ({
+    cores: t.cores + (h.cpu_cores || 0), lc: t.lc + h._lc, packs: t.packs + h._packs,
+    win: t.win + h._winVms, tot: t.tot + h._totVms,
+  }), { cores: 0, lc: 0, packs: 0, win: 0, tot: 0 });
+
   return (
     <div>
       <div className="page-header">
@@ -609,6 +655,65 @@ function Hosts() {
         <InactiveHosts data={inactiveRes.data} reload={() => { inactiveRes.reload(); reload(); }} />
       ) : (
         <>
+          {/* Physical Server License Summary — sortable by cores, edition editable inline */}
+          <div className="card" style={{marginBottom:'1rem',padding:'1rem'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}} onClick={() => setShowSummary(s => !s)}>
+              <h3 style={{margin:0,fontSize:'0.95rem'}}>Physical Server License Summary ({physicalRows.length})</h3>
+              <span style={{fontSize:'0.8rem',color:'var(--primary)'}}>{showSummary ? '▾ Hide' : '▸ Show'}</span>
+            </div>
+            {showSummary && (
+              <>
+                {edSummary && (
+                  <div style={{fontSize:'0.82rem',color:'var(--text-secondary)',margin:'0.5rem 0 0.75rem',fontWeight:600}}>{edSummary}</div>
+                )}
+                <div style={{maxHeight:'440px',overflow:'auto'}}>
+                  <table className="data-table" style={{fontSize:'0.82rem'}}>
+                    <thead>
+                      <tr><th>Server</th><th>Sockets</th><th>Cores</th><th>Licensed Cores</th><th>2-Core Packs</th><th>Win VMs</th><th>Total VMs</th><th>WS License</th></tr>
+                    </thead>
+                    <tbody>
+                      {physicalRows.map(h => (
+                        <tr key={h.id} className={h.license_override ? 'row-override' : ''}>
+                          <td><strong>{h.hostname}</strong></td>
+                          <td>{h.cpu_sockets}</td>
+                          <td>{h.cpu_cores}</td>
+                          <td style={{fontWeight:600}}>{h._lc}</td>
+                          <td>{h._packs}</td>
+                          <td style={{fontWeight:600,color: h._winVms > 0 ? 'var(--primary)' : 'var(--text-muted)'}}>{h._winVms}</td>
+                          <td style={{color:'var(--text-secondary)'}}>{h._totVms}</td>
+                          <td>
+                            <select value={h.license_override || ''} onChange={e => setLicense(h.id, 'license_override', e.target.value)}>
+                              <option value="">Auto ({h.license_assignment})</option>
+                              <option value="Datacenter">Datacenter</option>
+                              <option value="Standard">Standard</option>
+                              <option value="None">None</option>
+                              <option value="Vendor">Vendor</option>
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                        <td>Total ({physicalRows.length})</td>
+                        <td></td>
+                        <td>{physTotals.cores}</td>
+                        <td>{physTotals.lc}</td>
+                        <td>{physTotals.packs}</td>
+                        <td>{physTotals.win}</td>
+                        <td>{physTotals.tot}</td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                <div style={{fontSize:'0.78rem',color:'var(--text-secondary)',marginTop:'0.4rem',lineHeight:1.5}}>
+                  Each physical server licenses all cores once (min 16, 8 per socket). Change a server's WS License to move Datacenter/Standard licenses around — licensed cores and totals recompute on save.
+                </div>
+              </>
+            )}
+          </div>
+
           <div className="filter-bar">
             <input type="text" placeholder="Search hostname, IP, OS..." value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
             <select value={filterSource} onChange={e => { setFilterSource(e.target.value); setPage(1); }}>
