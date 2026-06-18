@@ -1222,10 +1222,33 @@ async def delete_sccm_instance(sid: int):
 
 # ─── ESXi → Hyper-V Migration Tracking ───
 _MIGRATION_FIELDS = {
-    "vm_name", "power_state", "datastore", "schedule_jeremy", "move_daytime",
-    "move_afterhours", "migrated", "migrated_override", "date_migrated",
-    "verified_working", "zprl_to_nrep", "vpg_deleted", "should_be_zprl", "notes",
+    "vm_name", "power_state", "datastore", "app_support", "schedule_jeremy",
+    "move_daytime", "move_afterhours", "scheduled_at", "migrated", "migrated_override",
+    "date_migrated", "verified_working", "zprl_to_nrep", "vpg_deleted",
+    "should_be_zprl", "excluded", "notes",
 }
+
+def _coerce_migration_fields(fields: dict) -> dict:
+    """Convert date/datetime strings from the UI into proper objects for asyncpg."""
+    if "date_migrated" in fields:
+        dv = fields["date_migrated"]
+        if not dv:
+            fields["date_migrated"] = None
+        elif isinstance(dv, str):
+            try:
+                fields["date_migrated"] = date.fromisoformat(dv[:10])
+            except ValueError:
+                raise HTTPException(400, "date_migrated must be YYYY-MM-DD")
+    if "scheduled_at" in fields:
+        sv = fields["scheduled_at"]
+        if not sv:
+            fields["scheduled_at"] = None
+        elif isinstance(sv, str):
+            try:
+                fields["scheduled_at"] = datetime.fromisoformat(sv)
+            except ValueError:
+                raise HTTPException(400, "scheduled_at must be ISO datetime")
+    return fields
 
 @app.get("/api/migrations")
 async def list_migrations():
@@ -1249,9 +1272,10 @@ async def list_migrations():
         rows = await conn.fetch("SELECT * FROM migration_tracking ORDER BY migrated ASC, vm_name ASC")
         items = [dict(r) for r in rows]
 
-        # Auto-flag VMs detected in SCVMM as migrated, unless manually overridden
+        # Auto-flag VMs detected in SCVMM as migrated, unless manually overridden or excluded
         to_flip = [r["id"] for r in items
-                   if not r["migrated_override"] and not r["migrated"] and detected(r["vm_name"])]
+                   if not r["migrated_override"] and not r["migrated"]
+                   and not r["excluded"] and detected(r["vm_name"])]
         if to_flip:
             await conn.execute("""
                 UPDATE migration_tracking
@@ -1263,9 +1287,13 @@ async def list_migrations():
 
     for r in items:
         r["detected_scvmm"] = detected(r["vm_name"])
-    total = len(items)
-    done = sum(1 for r in items if r["migrated"])
-    return {"migrations": items, "total": total, "migrated": done, "remaining": total - done}
+    # Progress counts ignore excluded VMs (those that won't be migrated)
+    active = [r for r in items if not r["excluded"]]
+    total = len(active)
+    done = sum(1 for r in active if r["migrated"])
+    excluded = sum(1 for r in items if r["excluded"])
+    return {"migrations": items, "total": total, "migrated": done,
+            "remaining": total - done, "excluded": excluded}
 
 @app.post("/api/migrations")
 async def create_migration(data: dict):
@@ -1287,16 +1315,7 @@ async def update_migration(mid: int, data: dict):
     fields = {k: v for k, v in data.items() if k in _MIGRATION_FIELDS}
     if not fields:
         raise HTTPException(400, "No valid fields to update")
-    # DATE column needs a date object (or None), not a string
-    if "date_migrated" in fields:
-        dv = fields["date_migrated"]
-        if not dv:
-            fields["date_migrated"] = None
-        elif isinstance(dv, str):
-            try:
-                fields["date_migrated"] = date.fromisoformat(dv[:10])
-            except ValueError:
-                raise HTTPException(400, "date_migrated must be YYYY-MM-DD")
+    _coerce_migration_fields(fields)
     cols = list(fields.keys())
     set_clause = ", ".join(f"{c}=${i+2}" for i, c in enumerate(cols))
     values = [fields[c] for c in cols]
@@ -1311,6 +1330,32 @@ async def delete_migration(mid: int):
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM migration_tracking WHERE id=$1", mid)
     return {"status": "deleted"}
+
+@app.post("/api/migrations/bulk")
+async def bulk_update_migrations(data: dict):
+    """Apply the same field(s) to many rows at once (e.g. exclude/include)."""
+    ids = data.get("ids", [])
+    fields = {k: v for k, v in (data.get("fields") or {}).items() if k in _MIGRATION_FIELDS}
+    if not ids or not fields:
+        raise HTTPException(400, "ids and fields are required")
+    _coerce_migration_fields(fields)
+    cols = list(fields.keys())
+    set_clause = ", ".join(f"{c}=${i+2}" for i, c in enumerate(cols))
+    values = [fields[c] for c in cols]
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE migration_tracking SET {set_clause}, updated_at=NOW() WHERE id = ANY($1::int[])",
+            ids, *values)
+    return {"status": "ok", "updated": len(ids)}
+
+@app.post("/api/migrations/bulk-delete")
+async def bulk_delete_migrations(data: dict):
+    ids = data.get("ids", [])
+    if not ids:
+        raise HTTPException(400, "ids required")
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM migration_tracking WHERE id = ANY($1::int[])", ids)
+    return {"status": "ok", "deleted": len(ids)}
 
 @app.post("/api/migrations/import-esxi")
 async def import_esxi_vms():

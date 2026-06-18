@@ -974,10 +974,27 @@ function Migration() {
   const [filterStatus, setFilterStatus] = useState('');
   const [newVm, setNewVm] = useState('');
   const [busy, setBusy] = useState(false);
+  const [showVerified, setShowVerified] = useState(true);
+  const [migCol, setMigCol] = useState('vm_name');
+  const [migDir, setMigDir] = useState('asc');
+  const [selected, setSelected] = useState(new Set());
 
   const patch = async (id, fields) => {
     await fetch(`${API}/migrations/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });
     reload();
+  };
+  const toggleSel = (id, on) => setSelected(prev => { const s = new Set(prev); on ? s.add(id) : s.delete(id); return s; });
+  const bulkSet = async (fields) => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    await fetch(`${API}/migrations/bulk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids, fields }) });
+    setSelected(new Set()); reload();
+  };
+  const bulkDelete = async () => {
+    const ids = [...selected];
+    if (!ids.length || !confirm(`Delete ${ids.length} VM(s) from the tracker?`)) return;
+    await fetch(`${API}/migrations/bulk-delete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+    setSelected(new Set()); reload();
   };
   const addVm = async () => {
     const name = newVm.trim();
@@ -1006,13 +1023,39 @@ function Migration() {
   const rows = (data.migrations || []).filter(r => {
     if (search && !(r.vm_name || '').toLowerCase().includes(search.toLowerCase())) return false;
     if (filterStatus === 'migrated' && !r.migrated) return false;
-    if (filterStatus === 'pending' && r.migrated) return false;
+    if (filterStatus === 'pending' && (r.migrated || r.excluded)) return false;
+    if (filterStatus === 'excluded' && !r.excluded) return false;
     return true;
   });
   const pct = data.total ? Math.round((data.migrated / data.total) * 100) : 0;
 
+  const TEXT_COLS = ['vm_name', 'power_state', 'datastore', 'app_support'];
+  const RAW_COLS = ['date_migrated', 'scheduled_at'];
+  const sortVal = (r, col) => {
+    if (TEXT_COLS.includes(col)) return (r[col] || '').toLowerCase();
+    if (RAW_COLS.includes(col)) return r[col] || '';
+    if (col === 'detected_scvmm') return r.detected_scvmm ? 1 : 0;
+    return r[col] ? 1 : 0; // booleans
+  };
+  const sortedRows = [...rows].sort((a, b) => {
+    const av = sortVal(a, migCol), bv = sortVal(b, migCol);
+    if (av < bv) return migDir === 'asc' ? -1 : 1;
+    if (av > bv) return migDir === 'asc' ? 1 : -1;
+    return (a.vm_name || '').localeCompare(b.vm_name || '');
+  });
+  const toggleSort = (col) => {
+    if (migCol === col) setMigDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setMigCol(col); setMigDir('asc'); }
+  };
+  const colCount = (showVerified ? 15 : 14) + 1; // +1 for the selection column
+
   const Check = ({ row, field }) => (
     <input type="checkbox" checked={!!row[field]} onChange={e => patch(row.id, { [field]: e.target.checked })} />
+  );
+  const Th = ({ col, label }) => (
+    <th style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => toggleSort(col)}>
+      {label}{migCol === col ? (migDir === 'asc' ? ' ▲' : ' ▼') : ' ⇅'}
+    </th>
   );
 
   return (
@@ -1020,13 +1063,20 @@ function Migration() {
       <div className="page-header">
         <h1>Migration: ESXi → Hyper-V</h1>
         <div className="header-actions">
+          {selected.size > 0 && (
+            <>
+              <button className="btn btn-secondary" onClick={() => bulkSet({ excluded: true })}>Won't migrate ({selected.size})</button>
+              <button className="btn btn-secondary" onClick={() => bulkSet({ excluded: false })}>Include</button>
+              <button className="btn btn-danger" onClick={bulkDelete}>Delete</button>
+            </>
+          )}
           <button className="btn btn-secondary" onClick={importEsxi} disabled={busy}>Import ESXi VMs</button>
         </div>
       </div>
 
       <div className="info-box" style={{display:'block'}}>
         <div style={{display:'flex',justifyContent:'space-between',marginBottom:'0.4rem',fontSize:'0.85rem'}}>
-          <span><strong>{data.migrated}</strong> of <strong>{data.total}</strong> migrated · {data.remaining} remaining</span>
+          <span><strong>{data.migrated}</strong> of <strong>{data.total}</strong> migrated · {data.remaining} remaining{data.excluded ? ` · ${data.excluded} excluded` : ''}</span>
           <span style={{fontWeight:700}}>{pct}%</span>
         </div>
         <div style={{background:'var(--border-light)',borderRadius:'3px',height:'10px',overflow:'hidden'}}>
@@ -1040,30 +1090,39 @@ function Migration() {
           <option value="">All</option>
           <option value="pending">Pending</option>
           <option value="migrated">Migrated</option>
+          <option value="excluded">Excluded</option>
         </select>
         <input type="text" placeholder="Add VM name..." value={newVm} onChange={e => setNewVm(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addVm(); }} />
         <button className="btn btn-primary" onClick={addVm} disabled={busy || !newVm.trim()}>Add VM</button>
+        <button className="btn btn-secondary" onClick={() => setShowVerified(v => !v)}>{showVerified ? 'Hide Verified' : 'Show Verified'}</button>
       </div>
 
       <div style={{overflowX:'auto'}}>
         <table className="data-table" style={{fontSize:'0.82rem',whiteSpace:'nowrap'}}>
           <thead>
             <tr>
-              <th>VM Name</th><th>Power</th><th>Datastore</th>
-              <th>Sched w/ Jeremy</th><th>Daytime</th><th>Afterhours</th>
-              <th>In SCVMM</th><th>Migrated</th><th>Date Migrated</th><th>Verified</th>
-              <th>Zprl→Nrep</th><th>VPG Deleted</th><th>Should be zprl</th><th></th>
+              <th><input type="checkbox" checked={sortedRows.length > 0 && sortedRows.every(r => selected.has(r.id))} onChange={e => setSelected(e.target.checked ? new Set(sortedRows.map(r => r.id)) : new Set())} /></th>
+              <Th col="vm_name" label="VM Name" /><Th col="power_state" label="Power" /><Th col="datastore" label="Datastore" />
+              <Th col="app_support" label="App Support" /><Th col="move_daytime" label="Daytime" /><Th col="move_afterhours" label="Afterhours" />
+              <Th col="scheduled_at" label="Scheduled" /><Th col="detected_scvmm" label="In SCVMM" /><Th col="migrated" label="Migrated" /><Th col="date_migrated" label="Date Migrated" />
+              {showVerified && <Th col="verified_working" label="Verified" />}
+              <Th col="zprl_to_nrep" label="Zprl→Nrep" /><Th col="vpg_deleted" label="VPG Deleted" /><Th col="should_be_zprl" label="Should be zprl" /><th></th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
-              <tr key={r.id} style={r.migrated ? {background:'#f0fdf4'} : {}}>
-                <td><strong>{r.vm_name}</strong></td>
+            {sortedRows.map(r => (
+              <tr key={r.id} style={r.excluded ? {opacity:0.5} : (r.migrated ? {background:'#f0fdf4'} : {})}>
+                <td><input type="checkbox" checked={selected.has(r.id)} onChange={e => toggleSel(r.id, e.target.checked)} /></td>
+                <td>
+                  <strong style={r.excluded ? {textDecoration:'line-through'} : {}}>{r.vm_name}</strong>
+                  {r.excluded && <span style={{marginLeft:'0.3rem',fontSize:'0.7rem',color:'var(--text-muted)'}}>excluded</span>}
+                </td>
                 <td><input style={{width:'80px'}} defaultValue={r.power_state || ''} onBlur={e => { if (e.target.value !== (r.power_state || '')) patch(r.id, { power_state: e.target.value }); }} /></td>
                 <td><input style={{width:'120px'}} defaultValue={r.datastore || ''} onBlur={e => { if (e.target.value !== (r.datastore || '')) patch(r.id, { datastore: e.target.value }); }} /></td>
-                <td style={{textAlign:'center'}}><Check row={r} field="schedule_jeremy" /></td>
+                <td><input style={{width:'150px'}} placeholder="contact / notes" defaultValue={r.app_support || ''} onBlur={e => { if (e.target.value !== (r.app_support || '')) patch(r.id, { app_support: e.target.value }); }} /></td>
                 <td style={{textAlign:'center'}}><Check row={r} field="move_daytime" /></td>
                 <td style={{textAlign:'center'}}><Check row={r} field="move_afterhours" /></td>
+                <td><input type="datetime-local" value={r.scheduled_at ? r.scheduled_at.substring(0, 16) : ''} onChange={e => patch(r.id, { scheduled_at: e.target.value || null })} /></td>
                 <td style={{textAlign:'center'}} title={r.detected_scvmm ? 'Discovered in SCVMM scan' : 'Not yet seen in SCVMM'}>
                   {r.detected_scvmm ? <span style={{color:'var(--success)',fontWeight:700}}>✓</span> : <span style={{color:'var(--text-muted)'}}>—</span>}
                 </td>
@@ -1074,15 +1133,15 @@ function Migration() {
                     : (r.detected_scvmm && <span style={{marginLeft:'0.3rem',fontSize:'0.7rem',color:'var(--text-muted)'}}>auto</span>)}
                 </td>
                 <td><input type="date" value={r.date_migrated ? r.date_migrated.substring(0, 10) : ''} onChange={e => patch(r.id, { date_migrated: e.target.value || null })} /></td>
-                <td style={{textAlign:'center'}}><Check row={r} field="verified_working" /></td>
+                {showVerified && <td style={{textAlign:'center'}}><Check row={r} field="verified_working" /></td>}
                 <td style={{textAlign:'center'}}><Check row={r} field="zprl_to_nrep" /></td>
                 <td style={{textAlign:'center'}}><Check row={r} field="vpg_deleted" /></td>
                 <td style={{textAlign:'center'}}><Check row={r} field="should_be_zprl" /></td>
                 <td><button className="btn-sm" onClick={() => remove(r.id, r.vm_name)}>✕</button></td>
               </tr>
             ))}
-            {rows.length === 0 && (
-              <tr><td colSpan={14} style={{textAlign:'center',color:'var(--text-muted)',padding:'1.5rem'}}>
+            {sortedRows.length === 0 && (
+              <tr><td colSpan={colCount} style={{textAlign:'center',color:'var(--text-muted)',padding:'1.5rem'}}>
                 No VMs tracked yet. Click "Import ESXi VMs" or add one above.
               </td></tr>
             )}
