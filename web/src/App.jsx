@@ -28,6 +28,7 @@ const PAGES = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'hosts', label: 'Hosts', icon: '🖥️' },
   { id: 'compliance', label: 'Compliance', icon: '✅' },
+  { id: 'migration', label: 'Migration', icon: '🚚' },
   { id: 'entitlements', label: 'Entitlements', icon: '📜' },
   { id: 'scanners', label: 'Scanners', icon: '🔍' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
@@ -964,6 +965,134 @@ const MS_PARTS = [
   { part: 'R18-03500', desc: 'Win Server RDS CAL ALng LSA User', family: 'WindowsServer', edition: 'RDS', type: 'cal_user' },
 ];
 
+// ════════════════════════════════════════════════════════════════
+// Migration (ESXi → Hyper-V)
+// ════════════════════════════════════════════════════════════════
+function Migration() {
+  const { data, loading, reload } = useFetch('/migrations');
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [newVm, setNewVm] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const patch = async (id, fields) => {
+    await fetch(`${API}/migrations/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });
+    reload();
+  };
+  const addVm = async () => {
+    const name = newVm.trim();
+    if (!name) return;
+    setBusy(true);
+    const res = await fetch(`${API}/migrations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vm_name: name }) });
+    setBusy(false);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.detail || 'Add failed'); return; }
+    setNewVm(''); reload();
+  };
+  const importEsxi = async () => {
+    setBusy(true);
+    const res = await fetch(`${API}/migrations/import-esxi`, { method: 'POST' });
+    setBusy(false);
+    const r = await res.json().catch(() => ({ added: 0 }));
+    alert(`Imported ${r.added} VM(s) from vCenter inventory.`);
+    reload();
+  };
+  const remove = async (id, name) => {
+    if (!confirm(`Remove ${name} from the tracker?`)) return;
+    await fetch(`${API}/migrations/${id}`, { method: 'DELETE' });
+    reload();
+  };
+
+  if (loading || !data) return <Spinner />;
+  const rows = (data.migrations || []).filter(r => {
+    if (search && !(r.vm_name || '').toLowerCase().includes(search.toLowerCase())) return false;
+    if (filterStatus === 'migrated' && !r.migrated) return false;
+    if (filterStatus === 'pending' && r.migrated) return false;
+    return true;
+  });
+  const pct = data.total ? Math.round((data.migrated / data.total) * 100) : 0;
+
+  const Check = ({ row, field }) => (
+    <input type="checkbox" checked={!!row[field]} onChange={e => patch(row.id, { [field]: e.target.checked })} />
+  );
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Migration: ESXi → Hyper-V</h1>
+        <div className="header-actions">
+          <button className="btn btn-secondary" onClick={importEsxi} disabled={busy}>Import ESXi VMs</button>
+        </div>
+      </div>
+
+      <div className="info-box" style={{display:'block'}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:'0.4rem',fontSize:'0.85rem'}}>
+          <span><strong>{data.migrated}</strong> of <strong>{data.total}</strong> migrated · {data.remaining} remaining</span>
+          <span style={{fontWeight:700}}>{pct}%</span>
+        </div>
+        <div style={{background:'var(--border-light)',borderRadius:'3px',height:'10px',overflow:'hidden'}}>
+          <div style={{width:`${pct}%`,height:'100%',background:'var(--success)',transition:'width 0.4s ease'}} />
+        </div>
+      </div>
+
+      <div className="filter-bar" style={{marginTop:'1rem'}}>
+        <input type="text" placeholder="Search VM..." value={search} onChange={e => setSearch(e.target.value)} />
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+          <option value="">All</option>
+          <option value="pending">Pending</option>
+          <option value="migrated">Migrated</option>
+        </select>
+        <input type="text" placeholder="Add VM name..." value={newVm} onChange={e => setNewVm(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addVm(); }} />
+        <button className="btn btn-primary" onClick={addVm} disabled={busy || !newVm.trim()}>Add VM</button>
+      </div>
+
+      <div style={{overflowX:'auto'}}>
+        <table className="data-table" style={{fontSize:'0.82rem',whiteSpace:'nowrap'}}>
+          <thead>
+            <tr>
+              <th>VM Name</th><th>Power</th><th>Datastore</th>
+              <th>Sched w/ Jeremy</th><th>Daytime</th><th>Afterhours</th>
+              <th>In SCVMM</th><th>Migrated</th><th>Date Migrated</th><th>Verified</th>
+              <th>Zprl→Nrep</th><th>VPG Deleted</th><th>Should be zprl</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.id} style={r.migrated ? {background:'#f0fdf4'} : {}}>
+                <td><strong>{r.vm_name}</strong></td>
+                <td><input style={{width:'80px'}} defaultValue={r.power_state || ''} onBlur={e => { if (e.target.value !== (r.power_state || '')) patch(r.id, { power_state: e.target.value }); }} /></td>
+                <td><input style={{width:'120px'}} defaultValue={r.datastore || ''} onBlur={e => { if (e.target.value !== (r.datastore || '')) patch(r.id, { datastore: e.target.value }); }} /></td>
+                <td style={{textAlign:'center'}}><Check row={r} field="schedule_jeremy" /></td>
+                <td style={{textAlign:'center'}}><Check row={r} field="move_daytime" /></td>
+                <td style={{textAlign:'center'}}><Check row={r} field="move_afterhours" /></td>
+                <td style={{textAlign:'center'}} title={r.detected_scvmm ? 'Discovered in SCVMM scan' : 'Not yet seen in SCVMM'}>
+                  {r.detected_scvmm ? <span style={{color:'var(--success)',fontWeight:700}}>✓</span> : <span style={{color:'var(--text-muted)'}}>—</span>}
+                </td>
+                <td style={{textAlign:'center',whiteSpace:'nowrap'}}>
+                  <input type="checkbox" checked={!!r.migrated} onChange={e => patch(r.id, { migrated: e.target.checked, migrated_override: true })} />
+                  {r.migrated_override
+                    ? <button className="btn-sm" style={{marginLeft:'0.3rem'}} title="Manual override — click to follow SCVMM auto-detection" onClick={() => patch(r.id, { migrated_override: false })}>manual</button>
+                    : (r.detected_scvmm && <span style={{marginLeft:'0.3rem',fontSize:'0.7rem',color:'var(--text-muted)'}}>auto</span>)}
+                </td>
+                <td><input type="date" value={r.date_migrated ? r.date_migrated.substring(0, 10) : ''} onChange={e => patch(r.id, { date_migrated: e.target.value || null })} /></td>
+                <td style={{textAlign:'center'}}><Check row={r} field="verified_working" /></td>
+                <td style={{textAlign:'center'}}><Check row={r} field="zprl_to_nrep" /></td>
+                <td style={{textAlign:'center'}}><Check row={r} field="vpg_deleted" /></td>
+                <td style={{textAlign:'center'}}><Check row={r} field="should_be_zprl" /></td>
+                <td><button className="btn-sm" onClick={() => remove(r.id, r.vm_name)}>✕</button></td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan={14} style={{textAlign:'center',color:'var(--text-muted)',padding:'1.5rem'}}>
+                No VMs tracked yet. Click "Import ESXi VMs" or add one above.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function Entitlements() {
   const { data, loading, reload } = useFetch('/entitlements');
   const { data: agrData, loading: agrLoading, reload: agrReload } = useFetch('/agreements');
@@ -1870,7 +1999,7 @@ function SystemUpdate() {
 // ════════════════════════════════════════════════════════════════
 export default function App() {
   const [page, setPage] = useState('dashboard');
-  const pages = { dashboard: Dashboard, hosts: Hosts, compliance: Compliance, entitlements: Entitlements, scanners: Scanners, settings: Settings, scripts: ScriptsPage, logs: LogsPage, updates: SystemUpdate };
+  const pages = { dashboard: Dashboard, hosts: Hosts, compliance: Compliance, migration: Migration, entitlements: Entitlements, scanners: Scanners, settings: Settings, scripts: ScriptsPage, logs: LogsPage, updates: SystemUpdate };
   const Page = pages[page] || Dashboard;
   return (
     <div className="app-layout">

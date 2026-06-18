@@ -1220,6 +1220,112 @@ async def delete_sccm_instance(sid: int):
     return {"status": "deleted"}
 
 
+# ─── ESXi → Hyper-V Migration Tracking ───
+_MIGRATION_FIELDS = {
+    "vm_name", "power_state", "datastore", "schedule_jeremy", "move_daytime",
+    "move_afterhours", "migrated", "migrated_override", "date_migrated",
+    "verified_working", "zprl_to_nrep", "vpg_deleted", "should_be_zprl", "notes",
+}
+
+@app.get("/api/migrations")
+async def list_migrations():
+    async with pool.acquire() as conn:
+        # VM names currently discovered in SCVMM (i.e., now running on Hyper-V)
+        scvmm_rows = await conn.fetch(
+            "SELECT DISTINCT hostname FROM hosts WHERE status='active' AND scan_source='scvmm'")
+        scvmm = set()
+        for r in scvmm_rows:
+            h = (r["hostname"] or "").upper()
+            if h:
+                scvmm.add(h)
+                scvmm.add(h.split(".")[0])
+
+        def detected(name):
+            if not name:
+                return False
+            u = name.upper()
+            return u in scvmm or u.split(".")[0] in scvmm
+
+        rows = await conn.fetch("SELECT * FROM migration_tracking ORDER BY migrated ASC, vm_name ASC")
+        items = [dict(r) for r in rows]
+
+        # Auto-flag VMs detected in SCVMM as migrated, unless manually overridden
+        to_flip = [r["id"] for r in items
+                   if not r["migrated_override"] and not r["migrated"] and detected(r["vm_name"])]
+        if to_flip:
+            await conn.execute("""
+                UPDATE migration_tracking
+                SET migrated=TRUE, date_migrated=COALESCE(date_migrated, CURRENT_DATE), updated_at=NOW()
+                WHERE id = ANY($1::int[])
+            """, to_flip)
+            rows = await conn.fetch("SELECT * FROM migration_tracking ORDER BY migrated ASC, vm_name ASC")
+            items = [dict(r) for r in rows]
+
+    for r in items:
+        r["detected_scvmm"] = detected(r["vm_name"])
+    total = len(items)
+    done = sum(1 for r in items if r["migrated"])
+    return {"migrations": items, "total": total, "migrated": done, "remaining": total - done}
+
+@app.post("/api/migrations")
+async def create_migration(data: dict):
+    vm_name = (data.get("vm_name") or "").strip()
+    if not vm_name:
+        raise HTTPException(400, "vm_name required")
+    async with pool.acquire() as conn:
+        try:
+            mid = await conn.fetchval(
+                "INSERT INTO migration_tracking (vm_name, power_state, datastore, notes) VALUES ($1,$2,$3,$4) RETURNING id",
+                vm_name, data.get("power_state"), data.get("datastore"), data.get("notes"))
+        except asyncpg.UniqueViolationError:
+            raise HTTPException(409, f"{vm_name} is already tracked")
+    return {"status": "created", "id": mid}
+
+@app.patch("/api/migrations/{mid}")
+async def update_migration(mid: int, data: dict):
+    # Only allow known columns; build a dynamic SET clause
+    fields = {k: v for k, v in data.items() if k in _MIGRATION_FIELDS}
+    if not fields:
+        raise HTTPException(400, "No valid fields to update")
+    # DATE column needs a date object (or None), not a string
+    if "date_migrated" in fields:
+        dv = fields["date_migrated"]
+        if not dv:
+            fields["date_migrated"] = None
+        elif isinstance(dv, str):
+            try:
+                fields["date_migrated"] = date.fromisoformat(dv[:10])
+            except ValueError:
+                raise HTTPException(400, "date_migrated must be YYYY-MM-DD")
+    cols = list(fields.keys())
+    set_clause = ", ".join(f"{c}=${i+2}" for i, c in enumerate(cols))
+    values = [fields[c] for c in cols]
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE migration_tracking SET {set_clause}, updated_at=NOW() WHERE id=$1",
+            mid, *values)
+    return {"status": "updated"}
+
+@app.delete("/api/migrations/{mid}")
+async def delete_migration(mid: int):
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM migration_tracking WHERE id=$1", mid)
+    return {"status": "deleted"}
+
+@app.post("/api/migrations/import-esxi")
+async def import_esxi_vms():
+    """Add any active vCenter/ESXi VMs that aren't already in the tracker."""
+    async with pool.acquire() as conn:
+        added = await conn.fetch("""
+            INSERT INTO migration_tracking (vm_name)
+            SELECT hostname FROM hosts
+            WHERE status='active' AND is_virtual=TRUE AND scan_source='vcenter'
+            ON CONFLICT (vm_name) DO NOTHING
+            RETURNING id
+        """)
+    return {"status": "ok", "added": len(added)}
+
+
 # ─── Excel Export ───
 @app.get("/api/export/trueup")
 async def export_excel():
