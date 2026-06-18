@@ -978,6 +978,7 @@ function Migration() {
   const [migCol, setMigCol] = useState('vm_name');
   const [migDir, setMigDir] = useState('asc');
   const [selected, setSelected] = useState(new Set());
+  const [migPage, setMigPage] = useState(1);
 
   const patch = async (id, fields) => {
     await fetch(`${API}/migrations/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });
@@ -1046,8 +1047,13 @@ function Migration() {
   const toggleSort = (col) => {
     if (migCol === col) setMigDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setMigCol(col); setMigDir('asc'); }
+    setMigPage(1);
   };
   const colCount = (showVerified ? 15 : 14) + 1; // +1 for the selection column
+  const pageSize = 100;
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+  const curPage = Math.min(migPage, totalPages);
+  const pagedRows = sortedRows.slice((curPage - 1) * pageSize, curPage * pageSize);
 
   const Check = ({ row, field }) => (
     <input type="checkbox" checked={!!row[field]} onChange={e => patch(row.id, { [field]: e.target.checked })} />
@@ -1085,8 +1091,8 @@ function Migration() {
       </div>
 
       <div className="filter-bar" style={{marginTop:'1rem'}}>
-        <input type="text" placeholder="Search VM..." value={search} onChange={e => setSearch(e.target.value)} />
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+        <input type="text" placeholder="Search VM..." value={search} onChange={e => { setSearch(e.target.value); setMigPage(1); }} />
+        <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setMigPage(1); }}>
           <option value="">All</option>
           <option value="pending">Pending</option>
           <option value="migrated">Migrated</option>
@@ -1110,7 +1116,7 @@ function Migration() {
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map(r => (
+            {pagedRows.map(r => (
               <tr key={r.id} style={r.excluded ? {opacity:0.5} : (r.migrated ? {background:'#f0fdf4'} : {})}>
                 <td><input type="checkbox" checked={selected.has(r.id)} onChange={e => toggleSel(r.id, e.target.checked)} /></td>
                 <td>
@@ -1148,6 +1154,13 @@ function Migration() {
           </tbody>
         </table>
       </div>
+      {totalPages > 1 && (
+        <div className="pagination">
+          <button disabled={curPage <= 1} onClick={() => setMigPage(curPage - 1)}>← Prev</button>
+          <span>Page {curPage} of {totalPages} · {sortedRows.length} VMs</span>
+          <button disabled={curPage >= totalPages} onClick={() => setMigPage(curPage + 1)}>Next →</button>
+        </div>
+      )}
     </div>
   );
 }
