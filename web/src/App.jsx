@@ -11,7 +11,7 @@ function useFetch(url, deps = []) {
   const [error, setError] = useState(null);
   const reload = useCallback(() => {
     setLoading(true);
-    fetch(`${API}${url}`).then(r => r.json()).then(d => { setData(d); setError(null); })
+    fetch(`${API}${url}`, { cache: 'no-store' }).then(r => r.json()).then(d => { setData(d); setError(null); })
       .catch(e => setError(e.message)).finally(() => setLoading(false));
   }, [url, ...deps]);
   useEffect(reload, [reload]);

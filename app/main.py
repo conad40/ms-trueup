@@ -118,6 +118,17 @@ app = FastAPI(title="MS License True-Up", version="2.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+@app.middleware("http")
+async def _no_cache_api(request: Request, call_next):
+    """Prevent browsers from serving stale /api responses (e.g. dashboard not refreshing)."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 # ════════════════════════════════════════════════════════════════
 # Smart Upsert — THE one function used everywhere
 # ════════════════════════════════════════════════════════════════
