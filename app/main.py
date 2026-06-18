@@ -1214,6 +1214,16 @@ async def delete_sccm_instance(sid: int):
 async def export_excel():
     from openpyxl import Workbook
     wb = Workbook()
+
+    def _clean(rec):
+        # openpyxl can't write timezone-aware datetimes; strip tzinfo (values are stored UTC)
+        out = []
+        for v in rec.values():
+            if isinstance(v, datetime) and v.tzinfo is not None:
+                v = v.replace(tzinfo=None)
+            out.append(v)
+        return out
+
     async with pool.acquire() as conn:
         ws_rows = await conn.fetch("SELECT hostname, os_edition, CASE WHEN is_virtual THEN 'Virtual' ELSE 'Physical' END as type, cpu_sockets, cpu_cores, domain, last_scan FROM hosts WHERE status='active' AND os_name ILIKE '%server%' ORDER BY os_edition, hostname")
         sql_rows = await conn.fetch("SELECT h.hostname, si.instance_name, si.edition, si.version_name, si.license_model, h.cpu_cores, si.is_clustered FROM sql_instances si JOIN hosts h ON h.id=si.host_id WHERE h.status='active' ORDER BY si.edition")
@@ -1224,15 +1234,15 @@ async def export_excel():
     ws1 = wb.active
     ws1.title = "Windows Server"
     ws1.append(["Hostname", "Edition", "Type", "Sockets", "Cores", "Domain", "Last Scan"])
-    for r in ws_rows: ws1.append(list(r.values()))
+    for r in ws_rows: ws1.append(_clean(r))
 
     ws2 = wb.create_sheet("SQL Server")
     ws2.append(["Hostname", "Instance", "Edition", "Version", "License Model", "Cores", "Clustered"])
-    for r in sql_rows: ws2.append(list(r.values()))
+    for r in sql_rows: ws2.append(_clean(r))
 
     ws3 = wb.create_sheet("Other Products")
     ws3.append(["Hostname", "Product", "Family", "Version", "Edition"])
-    for r in prod_rows: ws3.append(list(r.values()))
+    for r in prod_rows: ws3.append(_clean(r))
 
     ws4 = wb.create_sheet("Compliance")
     ws4.append(["Product", "Type", "Required Cores", "Required 2-Packs", "Entitled Cores", "Entitled 2-Packs", "Gap", "Compliant", "Notes"])

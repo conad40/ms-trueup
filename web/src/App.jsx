@@ -476,6 +476,11 @@ function Hosts() {
   const [sortCol, setSortCol] = useState('hostname');
   const [sortDir, setSortDir] = useState('asc');
   const [showSummary, setShowSummary] = useState(true);
+  const [sumSearch, setSumSearch] = useState('');
+  const [sumEd, setSumEd] = useState('');
+  const [sumOs, setSumOs] = useState('');
+  const [sumSortCol, setSumSortCol] = useState('lc');
+  const [sumSortDir, setSumSortDir] = useState('desc');
   const { data, loading, reload } = useFetch(`/hosts?page=1&per_page=10000`);
   const inactiveRes = useFetch('/hosts/inactive');
 
@@ -607,13 +612,67 @@ function Hosts() {
       return { ...h, _lc: lc, _packs: Math.ceil(lc / 2), _winVms: vc.win, _totVms: vc.total };
     })
     .sort((a, b) => (b._lc - a._lc) || (b._totVms - a._totVms) || (a.hostname || '').localeCompare(b.hostname || ''));
+  const osCat = (os) => {
+    const o = (os || '').toLowerCase();
+    if (o.includes('esxi')) return 'VMware ESXi';
+    if (o.includes('windows server 2022')) return 'Windows Server 2022';
+    if (o.includes('windows server 2019')) return 'Windows Server 2019';
+    if (o.includes('windows server 2016')) return 'Windows Server 2016';
+    if (o.includes('windows server 2012')) return 'Windows Server 2012';
+    if (o.includes('windows server')) return 'Windows Server (Other)';
+    if (o.includes('red hat') || o.includes('rhel')) return 'Red Hat Linux';
+    if (o.includes('ubuntu')) return 'Ubuntu Linux';
+    if (o.includes('suse')) return 'SUSE Linux';
+    if (o.includes('centos')) return 'CentOS';
+    if (o.includes('linux')) return 'Linux (Other)';
+    if (!o) return 'Unknown';
+    return 'Other';
+  };
+  const sumOsCategories = [...new Set(physicalRows.map(h => osCat(h.os_name)))].sort();
+  const sumEditions = [...new Set(physicalRows.map(edLabel))].sort();
+  // Apply summary-specific filters
+  const displayRows = physicalRows.filter(h => {
+    if (sumSearch) {
+      const s = sumSearch.toLowerCase();
+      if (!(h.hostname || '').toLowerCase().includes(s) && !(h.os_name || '').toLowerCase().includes(s)) return false;
+    }
+    if (sumEd && edLabel(h) !== sumEd) return false;
+    if (sumOs && osCat(h.os_name) !== sumOs) return false;
+    return true;
+  }).sort((a, b) => {
+    let av, bv;
+    switch (sumSortCol) {
+      case 'hostname': av = (a.hostname || '').toLowerCase(); bv = (b.hostname || '').toLowerCase(); break;
+      case 'os_name': av = (a.os_name || '').toLowerCase(); bv = (b.os_name || '').toLowerCase(); break;
+      case 'sockets': av = a.cpu_sockets || 0; bv = b.cpu_sockets || 0; break;
+      case 'cores': av = a.cpu_cores || 0; bv = b.cpu_cores || 0; break;
+      case 'packs': av = a._packs; bv = b._packs; break;
+      case 'win': av = a._winVms; bv = b._winVms; break;
+      case 'tot': av = a._totVms; bv = b._totVms; break;
+      case 'edition': av = edLabel(a); bv = edLabel(b); break;
+      case 'lc': default: av = a._lc; bv = b._lc; break;
+    }
+    if (av < bv) return sumSortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sumSortDir === 'asc' ? 1 : -1;
+    return (a.hostname || '').localeCompare(b.hostname || '');
+  });
+  const sumToggleSort = (col) => {
+    if (sumSortCol === col) { setSumSortDir(d => d === 'asc' ? 'desc' : 'asc'); }
+    else { setSumSortCol(col); setSumSortDir(['hostname', 'os_name', 'edition'].includes(col) ? 'asc' : 'desc'); }
+  };
+  const SumTh = ({ col, label }) => (
+    <th style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => sumToggleSort(col)}>
+      {label}{sumSortCol === col ? (sumSortDir === 'asc' ? ' ▲' : ' ▼') : ' ⇅'}
+    </th>
+  );
+  // Totals + edition rollup reflect the filtered view
   const coresByEd = {};
-  physicalRows.forEach(h => { const e = edLabel(h); coresByEd[e] = (coresByEd[e] || 0) + h._lc; });
+  displayRows.forEach(h => { const e = edLabel(h); coresByEd[e] = (coresByEd[e] || 0) + h._lc; });
   const edSummary = Object.entries(coresByEd)
     .filter(([k, c]) => c > 0 && k !== '—' && k !== 'None' && k !== 'Vendor')
     .sort((a, b) => b[1] - a[1])
     .map(([k, c]) => `${k}: ${c}c (${Math.ceil(c / 2)} packs)`).join('   ·   ');
-  const physTotals = physicalRows.reduce((t, h) => ({
+  const physTotals = displayRows.reduce((t, h) => ({
     cores: t.cores + (h.cpu_cores || 0), lc: t.lc + h._lc, packs: t.packs + h._packs,
     win: t.win + h._winVms, tot: t.tot + h._totVms,
   }), { cores: 0, lc: 0, packs: 0, win: 0, tot: 0 });
@@ -658,7 +717,7 @@ function Hosts() {
           {/* Physical Server License Summary — sortable by cores, edition editable inline */}
           <div className="card" style={{marginBottom:'1rem',padding:'1rem'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}} onClick={() => setShowSummary(s => !s)}>
-              <h3 style={{margin:0,fontSize:'0.95rem'}}>Physical Server License Summary ({physicalRows.length})</h3>
+              <h3 style={{margin:0,fontSize:'0.95rem'}}>Physical Server License Summary ({displayRows.length}{displayRows.length !== physicalRows.length ? ` / ${physicalRows.length}` : ''})</h3>
               <span style={{fontSize:'0.8rem',color:'var(--primary)'}}>{showSummary ? '▾ Hide' : '▸ Show'}</span>
             </div>
             {showSummary && (
@@ -666,15 +725,40 @@ function Hosts() {
                 {edSummary && (
                   <div style={{fontSize:'0.82rem',color:'var(--text-secondary)',margin:'0.5rem 0 0.75rem',fontWeight:600}}>{edSummary}</div>
                 )}
+                <div className="filter-bar" style={{marginBottom:'0.5rem'}}>
+                  <input type="text" placeholder="Search server or OS..." value={sumSearch} onChange={e => setSumSearch(e.target.value)} />
+                  <select value={sumEd} onChange={e => setSumEd(e.target.value)}>
+                    <option value="">All Editions</option>
+                    {sumEditions.map(ed => <option key={ed} value={ed}>{ed === '—' ? 'Unassigned' : ed}</option>)}
+                  </select>
+                  <select value={sumOs} onChange={e => setSumOs(e.target.value)}>
+                    <option value="">All OS</option>
+                    {sumOsCategories.map(os => <option key={os} value={os}>{os}</option>)}
+                  </select>
+                  {(sumSearch || sumEd || sumOs) && (
+                    <button className="btn-sm" onClick={() => { setSumSearch(''); setSumEd(''); setSumOs(''); }}>Clear</button>
+                  )}
+                </div>
                 <div style={{maxHeight:'440px',overflow:'auto'}}>
                   <table className="data-table" style={{fontSize:'0.82rem'}}>
                     <thead>
-                      <tr><th>Server</th><th>Sockets</th><th>Cores</th><th>Licensed Cores</th><th>2-Core Packs</th><th>Win VMs</th><th>Total VMs</th><th>WS License</th></tr>
+                      <tr>
+                        <SumTh col="hostname" label="Server" />
+                        <SumTh col="os_name" label="OS" />
+                        <SumTh col="sockets" label="Sockets" />
+                        <SumTh col="cores" label="Cores" />
+                        <SumTh col="lc" label="Licensed Cores" />
+                        <SumTh col="packs" label="2-Core Packs" />
+                        <SumTh col="win" label="Win VMs" />
+                        <SumTh col="tot" label="Total VMs" />
+                        <SumTh col="edition" label="WS License" />
+                      </tr>
                     </thead>
                     <tbody>
-                      {physicalRows.map(h => (
+                      {displayRows.map(h => (
                         <tr key={h.id} className={h.license_override ? 'row-override' : ''}>
                           <td><strong>{h.hostname}</strong></td>
+                          <td title={h.os_name} style={{fontSize:'0.78rem',maxWidth:'200px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{h.os_name || '—'}</td>
                           <td>{h.cpu_sockets}</td>
                           <td>{h.cpu_cores}</td>
                           <td style={{fontWeight:600}}>{h._lc}</td>
@@ -695,7 +779,8 @@ function Hosts() {
                     </tbody>
                     <tfoot>
                       <tr style={{fontWeight:700,borderTop:'2px solid var(--border)'}}>
-                        <td>Total ({physicalRows.length})</td>
+                        <td>Total ({displayRows.length})</td>
+                        <td></td>
                         <td></td>
                         <td>{physTotals.cores}</td>
                         <td>{physTotals.lc}</td>
