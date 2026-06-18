@@ -1256,6 +1256,8 @@ async def list_migrations():
         # VM names currently discovered in SCVMM (i.e., now running on Hyper-V)
         scvmm_rows = await conn.fetch(
             "SELECT DISTINCT hostname FROM hosts WHERE status='active' AND scan_source='scvmm'")
+        scvmm_last = await conn.fetchval(
+            "SELECT MAX(last_scan) FROM hosts WHERE status='active' AND scan_source='scvmm'")
         scvmm = set()
         for r in scvmm_rows:
             h = (r["hostname"] or "").upper()
@@ -1293,7 +1295,8 @@ async def list_migrations():
     done = sum(1 for r in active if r["migrated"])
     excluded = sum(1 for r in items if r["excluded"])
     return {"migrations": items, "total": total, "migrated": done,
-            "remaining": total - done, "excluded": excluded}
+            "remaining": total - done, "excluded": excluded,
+            "scvmm_count": len(scvmm_rows), "scvmm_last_seen": scvmm_last}
 
 @app.post("/api/migrations")
 async def create_migration(data: dict):

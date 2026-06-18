@@ -1076,6 +1076,7 @@ function Migration() {
               <button className="btn btn-danger" onClick={bulkDelete}>Delete</button>
             </>
           )}
+          <button className="btn btn-secondary" onClick={() => reload()} title="Re-check the tracker against the latest SCVMM inventory the collector has pushed">Refresh SCVMM</button>
           <button className="btn btn-secondary" onClick={importEsxi} disabled={busy}>Import ESXi VMs</button>
         </div>
       </div>
@@ -1087,6 +1088,11 @@ function Migration() {
         </div>
         <div style={{background:'var(--border-light)',borderRadius:'3px',height:'10px',overflow:'hidden'}}>
           <div style={{width:`${pct}%`,height:'100%',background:'var(--success)',transition:'width 0.4s ease'}} />
+        </div>
+        <div style={{fontSize:'0.78rem',marginTop:'0.5rem',color:'var(--text-secondary)'}}>
+          {data.scvmm_count > 0
+            ? <>SCVMM inventory: <strong>{data.scvmm_count}</strong> hosts · last update {data.scvmm_last_seen ? new Date(data.scvmm_last_seen).toLocaleString() : '—'}</>
+            : <span style={{color:'var(--danger)'}}>No SCVMM data received yet — run the SCVMM collector (TrueUp-SCVMM.ps1 on the Scripts page) so "In SCVMM" can light up.</span>}
         </div>
       </div>
 
@@ -1104,7 +1110,7 @@ function Migration() {
       </div>
 
       <div style={{overflowX:'auto'}}>
-        <table className="data-table" style={{fontSize:'0.82rem',whiteSpace:'nowrap'}}>
+        <table className="data-table compact" style={{fontSize:'0.8rem',whiteSpace:'nowrap',width:'100%'}}>
           <thead>
             <tr>
               <th><input type="checkbox" checked={sortedRows.length > 0 && sortedRows.every(r => selected.has(r.id))} onChange={e => setSelected(e.target.checked ? new Set(sortedRows.map(r => r.id)) : new Set())} /></th>
@@ -1123,9 +1129,9 @@ function Migration() {
                   <strong style={r.excluded ? {textDecoration:'line-through'} : {}}>{r.vm_name}</strong>
                   {r.excluded && <span style={{marginLeft:'0.3rem',fontSize:'0.7rem',color:'var(--text-muted)'}}>excluded</span>}
                 </td>
-                <td><input style={{width:'80px'}} defaultValue={r.power_state || ''} onBlur={e => { if (e.target.value !== (r.power_state || '')) patch(r.id, { power_state: e.target.value }); }} /></td>
-                <td><input style={{width:'120px'}} defaultValue={r.datastore || ''} onBlur={e => { if (e.target.value !== (r.datastore || '')) patch(r.id, { datastore: e.target.value }); }} /></td>
-                <td><input style={{width:'150px'}} placeholder="contact / notes" defaultValue={r.app_support || ''} onBlur={e => { if (e.target.value !== (r.app_support || '')) patch(r.id, { app_support: e.target.value }); }} /></td>
+                <td><input style={{width:'64px'}} defaultValue={r.power_state || ''} onBlur={e => { if (e.target.value !== (r.power_state || '')) patch(r.id, { power_state: e.target.value }); }} /></td>
+                <td><input style={{width:'96px'}} defaultValue={r.datastore || ''} onBlur={e => { if (e.target.value !== (r.datastore || '')) patch(r.id, { datastore: e.target.value }); }} /></td>
+                <td><input style={{width:'120px'}} placeholder="contact / notes" defaultValue={r.app_support || ''} onBlur={e => { if (e.target.value !== (r.app_support || '')) patch(r.id, { app_support: e.target.value }); }} /></td>
                 <td style={{textAlign:'center'}}><Check row={r} field="move_daytime" /></td>
                 <td style={{textAlign:'center'}}><Check row={r} field="move_afterhours" /></td>
                 <td><input type="datetime-local" value={r.scheduled_at ? r.scheduled_at.substring(0, 16) : ''} onChange={e => patch(r.id, { scheduled_at: e.target.value || null })} /></td>
@@ -2076,7 +2082,7 @@ export default function App() {
   return (
     <div className="app-layout">
       <Nav current={page} onChange={setPage} />
-      <main className="main-content"><Page /></main>
+      <main className={`main-content${page === 'migration' ? ' main-wide' : ''}`}><Page /></main>
     </div>
   );
 }

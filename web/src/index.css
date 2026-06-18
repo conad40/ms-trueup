@@ -129,6 +129,9 @@ body {
   width: 100%;
 }
 
+/* Migration page needs the full window width for its wide table */
+.main-content.main-wide { max-width: none; }
+
 h1 {
   font-size: 1.5rem;
   font-weight: 700;
