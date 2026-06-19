@@ -1066,8 +1066,11 @@ function Migration() {
   const Check = ({ row, field }) => (
     <input type="checkbox" checked={!!row[field]} onChange={e => patch(row.id, { [field]: e.target.checked })} />
   );
-  const Th = ({ col, label }) => (
-    <th style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => toggleSort(col)}>
+  const Th = ({ col, label, narrow }) => (
+    <th onClick={() => toggleSort(col)}
+      style={narrow
+        ? {cursor:'pointer',whiteSpace:'normal',width:'48px',textAlign:'center',lineHeight:1.1}
+        : {cursor:'pointer',whiteSpace:'nowrap'}}>
       {label}{migCol === col ? (migDir === 'asc' ? ' ▲' : ' ▼') : ' ⇅'}
     </th>
   );
@@ -1124,9 +1127,9 @@ function Migration() {
             <tr>
               <th><input type="checkbox" checked={sortedRows.length > 0 && sortedRows.every(r => selected.has(r.id))} onChange={e => setSelected(e.target.checked ? new Set(sortedRows.map(r => r.id)) : new Set())} /></th>
               <Th col="vm_name" label="VM Name" /><Th col="power_state" label="Power" /><Th col="datastore" label="Datastore" />
-              <Th col="app_support" label="App Support" /><Th col="move_daytime" label="Daytime" /><Th col="move_afterhours" label="Afterhours" />
-              <Th col="scheduled_at" label="Scheduled" /><Th col="detected_scvmm" label="In SCVMM" /><Th col="migrated" label="Migrated" /><Th col="date_migrated" label="Date Migrated" />
-              {showVerified && <Th col="verified_working" label="Verified" />}
+              <Th col="app_support" label="App Support" /><Th col="move_daytime" label="Daytime" narrow /><Th col="move_afterhours" label="Afterhours" narrow />
+              <Th col="scheduled_at" label="Scheduled" /><Th col="detected_scvmm" label="In SCVMM" /><Th col="migrated" label="Migrated" narrow /><Th col="date_migrated" label="Date Migrated" />
+              {showVerified && <Th col="verified_working" label="Verified" narrow />}
               <th></th>
             </tr>
           </thead>
@@ -1144,11 +1147,11 @@ function Migration() {
                     <span className="slider" />
                   </label>
                 </td>
-                <td><input style={{width:'96px'}} defaultValue={r.datastore || ''} onBlur={e => { if (e.target.value !== (r.datastore || '')) patch(r.id, { datastore: e.target.value }); }} /></td>
-                <td><input style={{width:'120px'}} placeholder="contact / notes" defaultValue={r.app_support || ''} onBlur={e => { if (e.target.value !== (r.app_support || '')) patch(r.id, { app_support: e.target.value }); }} /></td>
+                <td><input style={{width:'180px'}} defaultValue={r.datastore || ''} onBlur={e => { if (e.target.value !== (r.datastore || '')) patch(r.id, { datastore: e.target.value }); }} /></td>
+                <td><input style={{width:'190px'}} placeholder="contact / notes" defaultValue={r.app_support || ''} onBlur={e => { if (e.target.value !== (r.app_support || '')) patch(r.id, { app_support: e.target.value }); }} /></td>
                 <td style={{textAlign:'center'}}><Check row={r} field="move_daytime" /></td>
                 <td style={{textAlign:'center'}}><Check row={r} field="move_afterhours" /></td>
-                <td><input type="datetime-local" value={r.scheduled_at ? r.scheduled_at.substring(0, 16) : ''} onChange={e => patch(r.id, { scheduled_at: e.target.value || null })} /></td>
+                <td><input type="datetime-local" style={{width:'160px'}} value={r.scheduled_at ? r.scheduled_at.substring(0, 16) : ''} onChange={e => patch(r.id, { scheduled_at: e.target.value || null })} /></td>
                 <td style={{textAlign:'center'}} title={r.detected_scvmm ? 'Discovered in SCVMM scan' : 'Not yet seen in SCVMM'}>
                   {r.detected_scvmm ? <span style={{color:'var(--success)',fontWeight:700}}>✓</span> : <span style={{color:'var(--text-muted)'}}>—</span>}
                 </td>
